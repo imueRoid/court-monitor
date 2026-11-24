@@ -59,7 +59,7 @@ class LoginInput(BaseModel):
 
 class PasswordInput(BaseModel):
     current: str = Field(min_length=1, max_length=256)
-    new: str = Field(min_length=16, max_length=256)
+    new: str = Field(min_length=8, max_length=256)
 
 
 class GoogleClientInput(BaseModel):

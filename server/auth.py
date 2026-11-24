@@ -41,8 +41,8 @@ class Auth:
                 db.execute(statement)
             row = db.execute("SELECT value FROM meta WHERE key='admin_password_hash'").fetchone()
             if not row and settings.password:
-                if not 16 <= len(settings.password) <= 256:
-                    raise RuntimeError("관리자 비밀번호는 16~256자여야 합니다.")
+                if not 8 <= len(settings.password) <= 256:
+                    raise RuntimeError("관리자 비밀번호는 8~256자여야 합니다.")
                 db.execute("INSERT INTO meta VALUES ('admin_password_hash',?)", (json.dumps(password_hash(settings.password)),))
             db.execute("INSERT OR IGNORE INTO meta VALUES ('auth_secret',?)", (json.dumps(secrets.token_hex(32)),))
         self.secret = store.get_meta("auth_secret").encode()
@@ -52,8 +52,8 @@ class Auth:
         return bool(self.store.get_meta("admin_password_hash"))
 
     def setup(self, password):
-        if not 16 <= len(password) <= 256:
-            raise HTTPException(422, "비밀번호는 16~256자여야 합니다.")
+        if not 8 <= len(password) <= 256:
+            raise HTTPException(422, "비밀번호는 8~256자여야 합니다.")
         with self.store.db(True) as db:
             if db.execute("SELECT 1 FROM meta WHERE key='admin_password_hash'").fetchone():
                 raise HTTPException(409, "관리자 비밀번호가 이미 설정되어 있습니다.")
@@ -113,8 +113,8 @@ class Auth:
             db.execute("DELETE FROM sessions WHERE token_hash=?", (hashlib.sha256(token.encode()).hexdigest(),))
 
     def change_password(self, current, new):
-        if not 16 <= len(new) <= 256:
-            raise HTTPException(422, "새 비밀번호는 16~256자여야 합니다.")
+        if not 8 <= len(new) <= 256:
+            raise HTTPException(422, "새 비밀번호는 8~256자여야 합니다.")
         with self.store.db(True) as db:
             encoded = json.loads(db.execute("SELECT value FROM meta WHERE key='admin_password_hash'").fetchone()[0])
             if not verify_password(current, encoded):

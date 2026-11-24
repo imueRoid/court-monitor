@@ -33,8 +33,8 @@ class Settings:
             except OSError as exc:
                 if explicit_file:
                     raise RuntimeError("관리자 암호 secret 파일을 읽지 못했습니다.") from exc
-        if password and not 16 <= len(password) <= 256:
-            raise RuntimeError("관리자 암호는 16자 이상이어야 합니다.")
+        if password and not 8 <= len(password) <= 256:
+            raise RuntimeError("관리자 암호는 8자 이상이어야 합니다.")
         settings = cls(database=Path(os.environ.get("DATABASE_PATH", "/data/cases.sqlite3")),
             username=os.environ.get("ADMIN_USER", "admin"), password=password,
             calendar_id=os.environ.get("GOOGLE_CALENDAR_ID", "").strip(),

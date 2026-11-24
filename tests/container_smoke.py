@@ -27,7 +27,7 @@ def wait_ready(port):
 def main():
     name = "court-monitor-ci-" + secrets.token_hex(4)
     volume = name + "-data"
-    password = secrets.token_urlsafe(32)
+    password = secrets.token_urlsafe(6)  # 실제 이미지에서도 최소 길이인 8자로 최초 설정·로그인을 검사한다.
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]

@@ -68,12 +68,13 @@ class AuthTests(unittest.TestCase):
         other = TestClient(self.app)
         try:
             self.login(other)
-            response = self.client.post("/api/password",json={"current":self.settings.password,"new":"new-fixture-password-long"},headers=headers)
+            self.assertEqual(self.client.post("/api/password",json={"current":self.settings.password,"new":"1234567"},headers=headers).status_code,422)
+            response = self.client.post("/api/password",json={"current":self.settings.password,"new":"newpass8"},headers=headers)
             self.assertEqual(response.status_code,200)
             self.assertEqual(other.get("/api/cases").status_code,401)
             restarted = create_app(self.settings,start_worker=False)
             self.assertFalse(verify_password(self.settings.password,restarted.state.store.get_meta("admin_password_hash")))
-            self.assertTrue(verify_password("new-fixture-password-long",restarted.state.store.get_meta("admin_password_hash")))
+            self.assertTrue(verify_password("newpass8",restarted.state.store.get_meta("admin_password_hash")))
         finally:
             other.close()
 
@@ -93,11 +94,11 @@ class AuthTests(unittest.TestCase):
             restarted.close()
 
     def test_single_file_compose_environment_and_repr_do_not_expose_secrets(self):
-        with patch.dict("os.environ",{"ADMIN_PASSWORD":"environment-fixture-password","ADMIN_PASSWORD_FILE":"","GOOGLE_CREDENTIALS_JSON":"fixture-credential-content"},clear=True):
+        with patch.dict("os.environ",{"ADMIN_PASSWORD":"envpass8","ADMIN_PASSWORD_FILE":"","GOOGLE_CREDENTIALS_JSON":"fixture-credential-content"},clear=True):
             settings = Settings.from_env()
-        self.assertEqual(settings.password,"environment-fixture-password")
+        self.assertEqual(settings.password,"envpass8")
         self.assertEqual(settings.credentials_json,"fixture-credential-content")
-        self.assertNotIn("environment-fixture-password",repr(settings))
+        self.assertNotIn("envpass8",repr(settings))
         self.assertNotIn("fixture-credential-content",repr(settings))
 
     def test_first_visit_sets_password_once_without_compose_secrets(self):
@@ -106,8 +107,8 @@ class AuthTests(unittest.TestCase):
         try:
             self.assertEqual(other.get("/",follow_redirects=False).headers["location"],"/setup")
             self.assertIn("처음 설정",other.get("/setup").text)
-            self.assertEqual(other.post("/api/setup",json={"password":"too-short"}).status_code,422)
-            self.assertEqual(other.post("/api/setup",json={"password":"first-setup-password-long"}).status_code,200)
+            self.assertEqual(other.post("/api/setup",json={"password":"1234567"}).status_code,422)
+            self.assertEqual(other.post("/api/setup",json={"password":"setpass8"}).status_code,200)
             self.assertEqual(other.get("/api/cases").status_code,200)
             self.assertEqual(other.post("/api/setup",json={"password":"overwrite-password-long"}).status_code,409)
         finally:
