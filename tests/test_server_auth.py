@@ -40,7 +40,7 @@ class AuthTests(unittest.TestCase):
         self.assertNotEqual(digest,self.client.cookies.get(COOKIE))
         cookie = self.client.post("/api/login",json={"password":self.settings.password}).headers["set-cookie"]
         self.assertIn("HttpOnly",cookie)
-        self.assertIn("SameSite=strict",cookie)
+        self.assertIn("SameSite=lax",cookie)
         self.assertIn("Max-Age=7776000",cookie)
 
     def test_session_and_cases_survive_app_restart_without_bootstrap_password(self):
@@ -100,7 +100,15 @@ class AuthTests(unittest.TestCase):
         self.assertNotIn("environment-fixture-password",repr(settings))
         self.assertNotIn("fixture-credential-content",repr(settings))
 
-    def test_new_database_requires_initial_password(self):
-        other = Store(Path(self.folder.name)/"empty.sqlite3")
-        with self.assertRaisesRegex(RuntimeError,"ADMIN_PASSWORD"):
-            Auth(other,replace(self.settings,password=""))
+    def test_first_visit_sets_password_once_without_compose_secrets(self):
+        settings = replace(self.settings,database=Path(self.folder.name)/"empty.sqlite3",password="")
+        other = TestClient(create_app(settings,start_worker=False))
+        try:
+            self.assertEqual(other.get("/",follow_redirects=False).headers["location"],"/setup")
+            self.assertIn("처음 설정",other.get("/setup").text)
+            self.assertEqual(other.post("/api/setup",json={"password":"too-short"}).status_code,422)
+            self.assertEqual(other.post("/api/setup",json={"password":"first-setup-password-long"}).status_code,200)
+            self.assertEqual(other.get("/api/cases").status_code,200)
+            self.assertEqual(other.post("/api/setup",json={"password":"overwrite-password-long"}).status_code,409)
+        finally:
+            other.close()

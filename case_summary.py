@@ -59,12 +59,9 @@ def summarize_case(result: dict, kinds: dict | None = None) -> dict[str, str]:
                         completed.append(day)
         date = max(completed, default="")
 
-    # 민사 화면의 종국결과를 사용자가 요청한 주문 요약으로 사용한다.
+    # 공식 종국결과 필드의 값을 그대로 사용한다. 승패 문구나 사건구분을 추측하지 않는다.
     civil_result = display_text(basic.get("csUltmtDvsNm"))
-    case_text = result.get("query", {}).get("case_number", "") or basic.get("userCsNo", "")
-    civil_case = result.get("case_type") == "CV" or bool(re.fullmatch(
-        r"\d{4}(?:준재|재)?(?:가합|가단|가소|나|다|머)\d+", re.sub(r"\s+", "", case_text)))
-    if civil_case and civil_result:
+    if civil_result:
         if not date:
             date = format_date(basic.get("csUltmtYmd"))
         if not judgment and date:

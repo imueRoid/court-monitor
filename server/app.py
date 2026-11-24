@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field, field_validator
 from court_client import CaseNumber, CourtError
 from .config import Settings
 from .auth import Auth
+from .google_oauth import CALLBACK, OAuthError
 from .domain import next_hearing
 from .store import Store
 from .worker import Worker
@@ -61,11 +62,20 @@ class PasswordInput(BaseModel):
     new: str = Field(min_length=16, max_length=256)
 
 
+class GoogleClientInput(BaseModel):
+    config: dict
+
+
+class GoogleStartInput(BaseModel):
+    redirect_uri: str = Field(max_length=2048)
+
+
 def create_app(settings=None, *, start_worker=True, worker_factory=Worker):
     settings = settings or Settings.from_env()
     store = Store(settings.database)
     auth = Auth(store, settings)
     worker = worker_factory(store, settings)
+    google = worker.calendar.connection
 
     def csrf(request: Request, x_csrf_token: str = Header(default="")):
         token = auth.require(request)
@@ -94,7 +104,7 @@ def create_app(settings=None, *, start_worker=True, worker_factory=Worker):
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
-        response.headers["Referrer-Policy"] = "same-origin"
+        response.headers["Referrer-Policy"] = "no-referrer" if request.url.path == CALLBACK else "same-origin"
         response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
         if not request.url.path.startswith("/static/"):
             response.headers["Cache-Control"] = "no-store"
@@ -104,17 +114,38 @@ def create_app(settings=None, *, start_worker=True, worker_factory=Worker):
     def health():
         return {"status": "ok"}
 
+    @app.get("/guide/google")
+    def google_guide():
+        return FileResponse(STATIC / "google-guide.html")
+
     @app.get("/")
     def index(request: Request):
+        if not auth.configured:
+            return RedirectResponse("/setup", status_code=303)
         if not auth.valid_session(auth.token(request)):
             return RedirectResponse("/login", status_code=303)
         return FileResponse(STATIC / "index.html")
 
     @app.get("/login")
     def login_page(request: Request):
+        if not auth.configured:
+            return RedirectResponse("/setup", status_code=303)
         if auth.valid_session(auth.token(request)):
             return RedirectResponse("/", status_code=303)
         return FileResponse(STATIC / "login.html")
+
+    @app.get("/setup")
+    def setup_page():
+        if auth.configured:
+            return RedirectResponse("/login", status_code=303)
+        return FileResponse(STATIC / "setup.html")
+
+    @app.post("/api/setup")
+    def setup(payload: LoginInput, request: Request):
+        token = auth.setup(payload.password)
+        response = JSONResponse({"configured": True})
+        auth.set_cookie(response, token, request)
+        return response
 
     @app.post("/api/login")
     def login(payload: LoginInput, request: Request):
@@ -144,10 +175,61 @@ def create_app(settings=None, *, start_worker=True, worker_factory=Worker):
     def bootstrap(request: Request):
         return {"csrf_token": auth.csrf_token(auth.token(request)), "timezone": settings.timezone,
                 "session_days": settings.session_days,
+                "google": google.status(),
                 "courts": store.get_meta("courts", []), "calendar_configured": worker.calendar.configured,
                 "verdict_checks_per_day": settings.verdict_checks_per_day,
                 "verdict_retry_minutes": settings.verdict_retry_minutes,
                 "watch_hours": [settings.watch_start_hour, settings.watch_end_hour]}
+
+    @api.get("/google/status")
+    def google_status():
+        return google.status()
+
+    @api.post("/google/client", dependencies=[Depends(csrf)])
+    def google_client(payload: GoogleClientInput):
+        try:
+            google.configure(payload.config)
+        except OAuthError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return google.status()
+
+    @api.post("/google/start", dependencies=[Depends(csrf)])
+    def google_start(payload: GoogleStartInput, request: Request):
+        from urllib.parse import urlsplit
+        if urlsplit(payload.redirect_uri).netloc.lower() != request.url.netloc.lower():
+            raise HTTPException(422, "현재 접속한 주소의 콜백 URL을 사용하세요.")
+        try:
+            return {"url": google.begin(payload.redirect_uri, auth.token(request))}
+        except OAuthError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @api.post("/google/calendar", dependencies=[Depends(csrf)])
+    def google_calendar_retry():
+        try:
+            google.prepare_calendar()
+        except OAuthError as exc:
+            google.store.set_meta("google_error", str(exc))
+            raise HTTPException(422, str(exc)) from exc
+        return google.status()
+
+    @api.post("/google/disconnect", dependencies=[Depends(csrf)])
+    def google_disconnect():
+        google.disconnect()
+        return google.status()
+
+    @app.get(CALLBACK, dependencies=[Depends(auth.require)])
+    def google_callback(request: Request, state: str = "", code: str = "", error: str = ""):
+        try:
+            if error:
+                google.cancel(state, auth.token(request))
+                return RedirectResponse("/?google=cancelled",status_code=303)
+            if not code or len(code) > 4096:
+                raise OAuthError("Google 인증 코드가 없습니다. 다시 연결하세요.")
+            google.finish(state, code, auth.token(request))
+            return RedirectResponse("/?google=connected",status_code=303)
+        except OAuthError as exc:
+            google.store.set_meta("google_error", str(exc))
+            return RedirectResponse("/?google=error",status_code=303)
 
     @api.get("/cases")
     def cases():

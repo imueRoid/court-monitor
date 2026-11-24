@@ -1,5 +1,5 @@
 # Synology Container Manager: 프로젝트에 이 내용만 넣어 실행합니다.
-# 최초 실행 전에 ADMIN_PASSWORD를 본인의 비밀번호(16~256자)로 채우세요.
+# 수정 없이 실행한 뒤 http://NAS-IP:7708 에서 비밀번호와 Google 연결을 설정합니다.
 version: "3.8"
 services:
   court:
@@ -12,12 +12,7 @@ services:
     environment:
       TZ: Asia/Seoul
       DATABASE_PATH: /data/cases.sqlite3
-      ADMIN_PASSWORD: ""  # 최초 실행 시에만 DB에 관리자 비밀번호를 등록합니다.
       SESSION_DAYS: "90"
-      COOKIE_SECURE: "false"  # HTTPS로만 접속할 때는 true로 설정합니다.
-      GOOGLE_CALENDAR_ID: ""  # 사건 관리 전용 캘린더 ID
-      GOOGLE_CREDENTIALS_JSON: |
-        {}
       BASE_POLL_HOURS: "24"
       HEARING_DELAY_MINUTES: "30"
       VERDICT_RETRY_MINUTES: "30"

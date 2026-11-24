@@ -95,7 +95,7 @@ class StoreTests(unittest.TestCase):
 
     def test_calendar_failure_retries_without_court_refetch(self):
         self.complete(observed(order="원고승"))
-        calendar = Mock(configured=True)
+        calendar = Mock(configured=True, calendar_id="")
         calendar.upsert.side_effect = CalendarError("temporary error")
         factory = Mock()
         worker = Worker(self.store, self.settings, calendar=calendar, client_factory=factory)

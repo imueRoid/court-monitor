@@ -29,6 +29,12 @@ class SummaryTests(unittest.TestCase):
         response["query"]["case_number"] = "2024가단1"
         self.assertEqual(summarize_case(response)["판결 주문"], "확인되지 않음")
 
+    def test_terminal_field_is_copied_without_winner_or_case_kind_guessing(self):
+        for terminal in ("원고패", "본소기각 · 반소일부인용", "법원이 제공한 새로운 종국결과"):
+            response = result({"csUltmtDvsNm":terminal,"csUltmtYmd":"20261002"})
+            response["query"]["case_number"]="2024라1"
+            self.assertEqual(summarize_case(response)["판결 주문"],terminal)
+
     def test_known_order_field_and_official_appeal_mapping(self):
         response = result({"btprtUltmtThrstCtt": "징역  1년 집행유예  2년<br><br>추징  1,234,000원 가납명령<br>보호관찰",
                            "btprtUltmtYmd": "20261002", "apelCrmcsLwstRltnrDvsCd": "02",

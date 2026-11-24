@@ -1,71 +1,50 @@
-# 시놀로지에서 실행 — 포트 7708
+# 시놀로지 설치 — Compose 수정 없이 실행
 
-Intel/AMD x86_64 CPU와 Container Manager를 사용하는 시놀로지 기준입니다. ARM NAS용 이미지는 제공하지 않습니다.
+Intel/AMD x86_64 CPU와 Container Manager를 사용하는 NAS 기준입니다. 공개 이미지 `imueroid/court-monitor:latest`를 사용하며 소스 빌드·별도 DB 컨테이너가 필요하지 않습니다.
 
-## Compose 파일 하나로 설치
+## 설치 순서
 
-1. [compose.synology.yaml](../compose.synology.yaml)을 내려받습니다. 소스코드·Dockerfile을 NAS에 복사하거나 이미지를 NAS에서 빌드할 필요가 없습니다.
-2. `ADMIN_PASSWORD: ""`에 첫 관리자 비밀번호를 입력합니다. 16~256자여야 하며, 공백인 상태로 처음 실행하면 시작하지 않습니다.
-3. File Station에서 프로젝트 폴더(예: `/volume1/docker/court-monitor`)를 만듭니다. Container Manager → **프로젝트 → 생성**에서 이 폴더를 선택하고, Compose 내용을 편집기에 넣거나 `docker-compose.yml`로 업로드합니다.
-4. 프로젝트를 시작한 뒤 `http://NAS의-IP:7708`에 접속합니다. 로그인 화면에서 설정한 비밀번호를 입력합니다.
+1. [compose.synology.yaml](../compose.synology.yaml)을 그대로 내려받습니다. 값을 수정하지 않습니다.
+2. File Station에서 프로젝트 폴더를 만듭니다. 예: `/volume1/docker/court-monitor`.
+3. Container Manager → 프로젝트 → 생성에서 그 폴더를 선택합니다. Compose 내용을 편집기에 넣거나 `docker-compose.yml`로 업로드하고 시작합니다.
+4. `http://NAS-IP:7708`로 접속합니다. 처음 설정 화면에서 관리자 비밀번호를 두 번 입력합니다. 이후에는 로그인 화면이 나옵니다.
+5. 관리 화면의 **Google Calendar 연결 → 처음부터 따라 하는 상세 안내**를 엽니다. 안내 주소는 `http://NAS-IP:7708/guide/google`입니다.
+6. 자신의 OAuth 앱을 처음 한 번 등록하고, 내려받은 웹 애플리케이션 JSON을 NAS 화면에서 등록합니다. **Google 계정 연결**에서 계정을 선택·승인하면 사건 전용 캘린더가 자동 생성됩니다.
 
-이미지는 `imueroid/court-monitor:latest`를 사용합니다. 외부 접속 포트는 **7708**, 컨테이너 내부 포트는 8080입니다. Compose의 `7708:8080`을 유지하면 됩니다.
-
-SSH로 실행하는 경우:
+SSH로 실행한다면:
 
 ```sh
 sudo docker compose -f compose.synology.yaml up -d
 ```
 
-NAS에 `docker compose` 대신 `docker-compose` 명령이 설치되어 있다면 같은 인수로 `sudo docker-compose -f compose.synology.yaml up -d`를 사용합니다.
+NAS가 구형 `docker-compose` 명령을 사용한다면 같은 인수로 실행합니다. 접속은 **호스트 7708 → 컨테이너 8080**입니다.
 
-## Google Calendar 연결
+## Google 독립 인증
 
-사건 관리 전용 캘린더를 만들고 서비스 계정에 일정 변경 권한으로 공유하는 절차는 [서버 안내](README.md#2-사건-전용-google-calendar-연결)를 참고하세요.
+각 사용자의 OAuth 클라이언트·Google 권한·캘린더·DB는 각자의 NAS에서 관리합니다. 공통 인증 서버가 없습니다. 앱은 자신의 OAuth 클라이언트가 만드는 보조 캘린더 범위인 `calendar.app.created` 권한을 요청합니다. 일반 개인 일정 전체를 수정하는 권한을 추가할 필요가 없습니다.
 
-Compose의 다음 두 항목을 채웁니다. JSON 파일을 별도로 마운트하지 않아도 됩니다.
+일반 HTTP NAS IP 주소 대신 HTTPS 주소 또는 localhost SSH 터널로 최초 인증합니다. 상세 안내 페이지에 DSM 역방향 프록시, localhost 터널, Google 프로젝트/API/동의 화면/클라이언트 생성, 콜백 URI 복사, JSON 등록, 재인증과 오류 해결을 설명했습니다. 설정을 도우미에게 맡길 때 복사할 요청문도 있습니다.
 
-```yaml
-      GOOGLE_CALENDAR_ID: "전용-캘린더-ID"
-      GOOGLE_CREDENTIALS_JSON: |
-        {
-          "type": "service_account",
-          "project_id": "본인의-project-id",
-          "private_key_id": "본인의-key-id",
-          "private_key": "-----BEGIN PRIVATE KEY-----\n본인의-키\n-----END PRIVATE KEY-----\n",
-          "client_email": "본인의-서비스계정@본인의-project-id.iam.gserviceaccount.com",
-          "client_id": "본인의-client-id",
-          "token_uri": "https://oauth2.googleapis.com/token"
-        }
-```
+실제 Google 계정 승인까지 확인하려면 사용자 본인의 OAuth 설정이 필요합니다. External + Testing 상태의 Calendar 갱신 토큰은 7일 후 만료될 수 있으므로 장기 운영 시 게시·확인 절차를 마치세요.
 
-내려받은 서비스 계정 JSON 원문을 `|` 아래 들여쓰기해서 넣으세요. 예시의 가짜 키를 사용하면 연결되지 않습니다. 캘린더 설정을 비워 두어도 사건 조회와 로그인은 사용할 수 있고, 캘린더 반영은 대기합니다. 실제 키와 암호를 채운 Compose는 개인 NAS에서만 관리하고 공개 저장소에 올리지 않습니다.
+## DB·로그인·재시작
 
-## 로그인·DB·이력
-
-- 별도 DB 서버나 DB 컨테이너가 필요하지 않습니다. Python 웹 서버·조회 작업자·SQLite가 **하나의 컨테이너** 안에서 동작합니다.
-- 사건 목록, 최근 조회 결과, 작업 예약, 캘린더 전송 상태, 관리자 비밀번호 해시, 로그인 세션을 `/data/cases.sqlite3`에 저장합니다.
-- `/data`는 `court_data` Docker named volume에 보관합니다. 이미지 업데이트나 컨테이너 재시작 후에도 데이터와 로그인이 유지됩니다. 프로젝트 이름을 바꾸면 다른 볼륨이 만들어질 수 있으므로 같은 프로젝트를 계속 사용하세요.
-- 비밀번호는 임의 salt와 PBKDF2-HMAC-SHA256 600,000회로 해시한 값만 DB에 저장합니다. 세션 토큰도 해시로 저장하며 브라우저에는 HttpOnly·SameSite 쿠키를 사용합니다.
-- 로그인 유지 기간은 기본 **90일**입니다. `SESSION_DAYS`로 1~365일 범위에서 조정할 수 있습니다. 쿠키를 지우거나 시크릿 창을 사용하면 다시 로그인해야 합니다.
-- 화면 아래의 **관리자 비밀번호 변경**으로 바꾸면 모든 기기의 세션이 해제됩니다. Compose의 초기 암호를 바꿔도 이미 DB에 저장한 비밀번호를 덮어쓰지 않습니다.
-- 처음 등록한 암호가 DB에 저장된 이후에는 Compose의 `ADMIN_PASSWORD` 값을 비워도 다시 시작할 수 있습니다. DB 볼륨을 지운 뒤에는 초기 암호를 다시 설정해야 합니다.
+- `court_data` named volume에 SQLite DB와 Google 인증 암호화 키를 저장합니다. 별도 DB 도커는 설치하지 않습니다.
+- 비밀번호는 salt + PBKDF2-HMAC-SHA256 600,000회 해시, 관리자 세션은 토큰 해시로 저장합니다. Google 시크릿·토큰은 NAS의 키로 암호화합니다.
+- 로그인 유지 기간은 기본 90일입니다. 로그아웃 또는 비밀번호 변경 시 해제할 수 있습니다. 비밀번호 변경은 웹에서 하며 모든 기기의 세션을 무효화합니다.
+- 사건·결과·다음 확인 시각·Google 전송 대기열을 DB에 저장합니다. 재부팅 후 같은 볼륨으로 컨테이너가 시작되면 예약을 읽고 이어서 처리합니다. 오래된 조회를 전부 몰아서 실행하지 않습니다.
+- Compose의 `restart: unless-stopped`는 비정상 종료·재부팅 후 재실행에 사용합니다. 명시적으로 중지한 컨테이너는 직접 다시 시작해야 할 수 있습니다.
+- Google 연결 해제는 이 NAS에 저장한 토큰을 지웁니다. 기존 Google 캘린더와 일정은 보존합니다.
 
 ## 업데이트와 백업
 
-Container Manager에서 동일 프로젝트의 이미지를 새로 내려받고 컨테이너를 재생성하거나 다음 명령을 사용합니다.
+같은 프로젝트에서 이미지를 새로 받고 재생성합니다.
 
 ```sh
 sudo docker compose -f compose.synology.yaml pull
 sudo docker compose -f compose.synology.yaml up -d
 ```
 
-`down -v`나 Docker 볼륨 삭제는 비밀번호·세션·사건 DB까지 지우므로 일반 업데이트에 사용하지 않습니다. 전체 백업은 서비스를 중지하고 해당 프로젝트의 `court_data` 볼륨 전체를 보관하세요.
+프로젝트 이름을 바꾸면 다른 볼륨을 사용할 수 있습니다. `down -v` 또는 볼륨 삭제는 DB·비밀번호·세션·Google 연결까지 지우므로 일반 업데이트에 사용하지 않습니다. 백업은 중지 상태에서 `court_data` 볼륨 전체를 보관하세요. DB와 `credentials.key`를 반드시 함께 복원합니다.
 
-HTTPS 역방향 프록시로만 사용할 때는 `COOKIE_SECURE: "true"`로 설정합니다. DSM의 방화벽을 사용하는 환경이면 사용하는 네트워크에서 TCP 7708 접근이 허용되어 있어야 합니다.
-
-## 이미지 빌드
-
-[GitHub Actions](https://github.com/imueRoid/court-monitor/actions)에서 서버 검사, 실제 Linux 컨테이너 로그인·SQLite 세션 재시작·OCR 모델 추론을 검사한 뒤 Docker Hub에 게시합니다. `latest` 외에 `sha-전체커밋SHA` 태그도 남겨 특정 버전으로 고정할 수 있습니다.
-
-공식 안내: [Synology Container Manager 프로젝트](https://kb.synology.com/en-global/DSM/help/ContainerManager/docker_project), [Docker의 GitHub Actions 빌드](https://docs.docker.com/build/ci/github-actions/).
+공식 참고: [Synology 프로젝트](https://kb.synology.com/en-global/DSM/help/ContainerManager/docker_project), [Google 웹 OAuth](https://developers.google.com/identity/protocols/oauth2/web-server).

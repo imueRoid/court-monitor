@@ -35,11 +35,15 @@ def main():
         docker("volume", "create", volume)
         docker("run", "-d", "--name", name, "--read-only", "--tmpfs", "/tmp:size=256m,mode=1777",
                "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "-p", f"127.0.0.1:{port}:8080",
-               "-v", volume + ":/data", "-e", "ADMIN_PASSWORD=" + password, "court-monitor:test")
+               "-v", volume + ":/data", "court-monitor:test")
         wait_ready(port)
         base = f"http://127.0.0.1:{port}"
         session = requests.Session()
         assert session.get(base + "/api/cases", timeout=5).status_code == 401
+        assert "처음 설정" in session.get(base + "/login", timeout=5).text
+        assert session.post(base + "/api/setup", json={"password": password}, timeout=10).ok
+        bootstrap = session.get(base + "/api/bootstrap", timeout=5).json()
+        assert session.post(base + "/api/logout", json={}, headers={"X-CSRF-Token":bootstrap["csrf_token"]}, timeout=5).ok
         assert "관리자 로그인" in session.get(base + "/login", timeout=5).text
         assert session.post(base + "/api/login", json={"password": password}, timeout=10).ok
         assert session.get(base + "/api/bootstrap", timeout=5).json()["session_days"] == 90

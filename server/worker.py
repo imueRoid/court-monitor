@@ -16,14 +16,14 @@ class Worker:
     def __init__(self, store, settings, calendar=None, client_factory=CourtClient, recognizer=None):
         self.store = store
         self.settings = settings
-        self.calendar = calendar or GoogleCalendar(settings)
+        self.calendar = calendar or GoogleCalendar(settings, store)
         self.client_factory = client_factory
         self.reader = recognizer or CaptchaRecognizer()
         self.client = None
         self.stop_event = threading.Event()
         self.thread = None
         self.last_court_request = 0
-        self.store.set_calendar_target(settings.calendar_id)
+        self.store.set_calendar_target(self.calendar.calendar_id)
 
     def start(self):
         self.thread = threading.Thread(target=self.run, name="court-monitor", daemon=True)
@@ -65,6 +65,7 @@ class Worker:
                         self.client.close()
                         self.client = None
         if self.calendar.configured:
+            self.store.set_calendar_target(self.calendar.calendar_id)
             event = self.store.claim_event(now)
             if event:
                 did_work = True

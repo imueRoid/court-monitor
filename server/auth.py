@@ -40,12 +40,25 @@ class Auth:
             ):
                 db.execute(statement)
             row = db.execute("SELECT value FROM meta WHERE key='admin_password_hash'").fetchone()
-            if not row:
+            if not row and settings.password:
                 if not 16 <= len(settings.password) <= 256:
-                    raise RuntimeError("처음 실행할 때 ADMIN_PASSWORD에 16~256자 관리자 비밀번호를 설정하세요.")
+                    raise RuntimeError("관리자 비밀번호는 16~256자여야 합니다.")
                 db.execute("INSERT INTO meta VALUES ('admin_password_hash',?)", (json.dumps(password_hash(settings.password)),))
             db.execute("INSERT OR IGNORE INTO meta VALUES ('auth_secret',?)", (json.dumps(secrets.token_hex(32)),))
         self.secret = store.get_meta("auth_secret").encode()
+
+    @property
+    def configured(self):
+        return bool(self.store.get_meta("admin_password_hash"))
+
+    def setup(self, password):
+        if not 16 <= len(password) <= 256:
+            raise HTTPException(422, "비밀번호는 16~256자여야 합니다.")
+        with self.store.db(True) as db:
+            if db.execute("SELECT 1 FROM meta WHERE key='admin_password_hash'").fetchone():
+                raise HTTPException(409, "관리자 비밀번호가 이미 설정되어 있습니다.")
+            db.execute("INSERT INTO meta VALUES ('admin_password_hash',?)", (json.dumps(password_hash(password)),))
+        return self.new_session()
 
     def csrf_token(self, token):
         return hmac.new(self.secret, token.encode(), hashlib.sha256).hexdigest()
@@ -67,6 +80,8 @@ class Auth:
         return token
 
     def login(self, password, client, now=None):
+        if not self.configured:
+            raise HTTPException(409, "먼저 관리자 비밀번호를 설정하세요.")
         now = time.time() if now is None else now
         client_hash = hmac.new(self.secret, client.encode(), hashlib.sha256).hexdigest()
         with self.store.db(True) as db:
@@ -110,9 +125,9 @@ class Auth:
 
     def set_cookie(self, response, token, request):
         response.set_cookie(COOKIE, token, max_age=self.settings.session_days * 86400,
-                            httponly=True, secure=self.settings.cookie_secure or request.url.scheme == "https",
-                            samesite="strict", path="/")
+                            httponly=True, secure=self.settings.cookie_secure or request.url.scheme == "https" or request.headers.get("origin", "").startswith("https://"),
+                            samesite="lax", path="/")
 
     @staticmethod
     def clear_cookie(response):
-        response.delete_cookie(COOKIE, path="/", httponly=True, samesite="strict")
+        response.delete_cookie(COOKIE, path="/", httponly=True, samesite="lax")
