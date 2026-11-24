@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>사건 일정 관리</title><link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header><div><span class="eyebrow">COURT MONITOR</span><h1>사건 일정 관리</h1><p>기일을 확인하고, 전용 캘린더에 최신 결과를 반영합니다.</p></div>
+    <div class="header-actions"><a href="https://calendar.google.com/" target="_blank" rel="noreferrer">Google Calendar 열기 ↗</a><button id="logout" class="secondary">로그아웃</button></div></header>
+  <main>
+    <div id="notice" class="notice" role="status">서버에 연결하는 중입니다.</div>
+    <section class="metrics"><article><span>등록 사건</span><strong id="total">0</strong></article><article><span>자동 확인 중</span><strong id="monitoring">0</strong></article><article><span>주문 확인 대기</span><strong id="waiting">0</strong></article><article><span>캘린더 반영 대기</span><strong id="pending">0</strong></article></section>
+    <section class="card"><h2>사건 등록</h2><form id="case-form" autocomplete="off">
+      <label class="court-field">법원<input id="court" name="court" placeholder="법원 이름을 입력하세요" required minlength="2" maxlength="100"><div id="suggestions" class="suggestions" hidden></div></label>
+      <label>사건번호<input id="case-number" name="case_number" placeholder="예: 2024가단12345" required maxlength="30"></label>
+      <label>당사자명<input id="party" name="party" placeholder="2글자 이상" required minlength="2" maxlength="100"></label>
+      <button type="submit" id="add">사건 등록</button>
+    </form><p class="hint">등록 후 서버가 자동 조회합니다. 기존 데스크톱 조회 이력 JSON도 가져올 수 있습니다.</p>
+    <div class="actions"><button id="import" class="secondary">기존 이력 가져오기</button><input id="import-file" type="file" accept=".json,application/json" hidden><button id="export" class="secondary">사건 목록 내보내기</button></div></section>
+    <section class="card"><div class="section-heading"><h2>등록된 사건</h2><button id="reload" class="secondary">목록 새로고침</button></div>
+      <div class="table-wrap"><table><thead><tr><th>사건</th><th>당사자</th><th>상태</th><th>차회 기일</th><th>최근 확인 / 다음 확인</th><th>캘린더</th><th>관리</th></tr></thead><tbody id="cases"></tbody></table></div><p id="empty" class="empty">첫 사건을 등록해 주세요.</p></section>
+    <section id="detail-card" class="card" hidden><div class="section-heading"><h2 id="detail-title">사건 결과</h2><span id="detail-time" class="hint"></span></div><dl id="detail"></dl><p id="detail-error" class="error"></p></section>
+    <section class="card"><div class="section-heading"><h2>최근 작업</h2><span class="hint">한국시간 기준 · 서버 재시작 후에도 조회 일정이 유지됩니다.</span></div><ul id="logs" class="logs"></ul></section>
+    <section class="card"><details><summary>관리자 비밀번호 변경</summary><p id="session-info" class="hint"></p><form id="password-form"><label>현재 비밀번호<input id="current-password" type="password" autocomplete="current-password" required maxlength="256"></label><label>새 비밀번호<input id="new-password" type="password" autocomplete="new-password" required minlength="16" maxlength="256"></label><label>새 비밀번호 확인<input id="confirm-password" type="password" autocomplete="new-password" required minlength="16" maxlength="256"></label><button id="change-password" type="submit">비밀번호 변경</button></form><p id="password-message" class="error" role="status"></p><p class="hint">변경하면 모든 기기의 로그인이 해제됩니다. 새 비밀번호로 다시 로그인하세요.</p></details></section>
+  </main><footer>사건정보의 변경과 법원 사이트의 반영 시점에 따라 동기화 결과가 달라질 수 있습니다.</footer>
+</body></html>

@@ -1,0 +1,4 @@
+"use strict";
+const message=document.getElementById("login-message");
+if(new URLSearchParams(location.search).get("changed"))message.textContent="비밀번호가 변경되었습니다. 새 비밀번호로 로그인하세요.";
+document.getElementById("login-form").addEventListener("submit",async event=>{event.preventDefault();const button=document.getElementById("login-button");button.disabled=true;message.textContent="";try{const response=await fetch("/api/login",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({password:document.getElementById("password").value})});const data=await response.json();if(!response.ok)throw new Error(typeof data.detail==="string"?data.detail:"로그인 요청을 처리하지 못했습니다.");location.assign("/");}catch(error){message.textContent=error.message;}finally{button.disabled=false;}});

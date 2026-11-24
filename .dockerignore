@@ -1,0 +1,14 @@
+*
+!Dockerfile
+!requirements.txt
+!requirements-server.txt
+!requirements-server.lock.txt
+!court_client.py
+!case_summary.py
+!captcha_ocr.py
+!server/
+!server/**
+**/__pycache__/
+**/*.pyc
+server/secrets/
+server/data/

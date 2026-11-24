@@ -1,0 +1,68 @@
+services:
+  court:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: court-monitor:local
+    restart: unless-stopped
+    init: true
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-8080}:8080"
+    environment:
+      TZ: Asia/Seoul
+      ADMIN_USER: ${ADMIN_USER:-admin}
+      ADMIN_PASSWORD_FILE: /run/secrets/admin_password
+      SESSION_DAYS: ${SESSION_DAYS:-90}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      GOOGLE_CREDENTIALS_FILE: /run/secrets/google_credentials
+      GOOGLE_CALENDAR_ID: ${GOOGLE_CALENDAR_ID:-}
+      DATABASE_PATH: /data/cases.sqlite3
+      BASE_POLL_HOURS: ${BASE_POLL_HOURS:-24}
+      HEARING_DELAY_MINUTES: ${HEARING_DELAY_MINUTES:-30}
+      VERDICT_RETRY_MINUTES: ${VERDICT_RETRY_MINUTES:-30}
+      VERDICT_CHECKS_PER_DAY: ${VERDICT_CHECKS_PER_DAY:-8}
+      WATCH_START_HOUR: ${WATCH_START_HOUR:-9}
+      WATCH_END_HOUR: ${WATCH_END_HOUR:-19}
+      REQUEST_GAP_SECONDS: ${REQUEST_GAP_SECONDS:-5}
+    secrets:
+      - admin_password
+      - google_credentials
+    volumes:
+      - court_data:/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    stop_grace_period: 90s
+
+  https:
+    image: caddy:2-alpine
+    profiles: [https]
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    volumes:
+      - ./server/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      court:
+        condition: service_healthy
+
+secrets:
+  admin_password:
+    file: ./secrets/admin-password.txt
+  google_credentials:
+    file: ./secrets/google-service-account.json
+
+volumes:
+  court_data:
+  caddy_data:
+  caddy_config:
