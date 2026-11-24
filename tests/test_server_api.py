@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import tempfile
 import unittest
 
@@ -64,3 +65,54 @@ class ApiTests(unittest.TestCase):
         data = self.client.get("/api/bootstrap").json()
         self.assertFalse(data["calendar_configured"])
         self.assertEqual(data["csrf_token"], headers["X-CSRF-Token"])
+
+    def test_case_search_paginates_matches_and_keeps_global_counts(self):
+        self.login()
+        store = self.app.state.store
+        keys = [store.add_case("가상법원", f"2024가단{i}", "검색당사자" if i < 13 else "다른당사자", now=i)
+                for i in range(1, 26)]
+        first = self.client.get("/api/cases").json()
+        self.assertEqual((len(first["cases"]), first["total"], first["pages"]), (10, 25, 3))
+        self.assertEqual(first["cases"][0]["id"], keys[-1])
+        second = self.client.get("/api/cases", params={"q": "검색당사자", "page": 2}).json()
+        self.assertEqual((len(second["cases"]), second["total"], second["pages"]), (2, 12, 2))
+        self.assertEqual(second["metrics"]["total"], 25)
+        self.assertEqual(second["metrics"]["monitoring"], 25)
+        self.assertFalse({r["id"] for r in first["cases"]} & {r["id"] for r in second["cases"]})
+        last = self.client.get("/api/cases", params={"q": "검색당사자", "page": 999}).json()
+        self.assertEqual(last["page"], 2)
+        self.assertEqual(last["cases"], second["cases"])
+        self.assertEqual(len(self.client.get("/api/export").json()["cases"]), 25)
+        for params in ({"page": 0}, {"page_size": 0}, {"page_size": 101}, {"q": "a" * 201}):
+            self.assertEqual(self.client.get("/api/cases", params=params).status_code, 422)
+
+    def test_search_uses_related_values_and_treats_symbols_literally(self):
+        self.login()
+        store = self.app.state.store
+        key = store.add_case("가상법원", "2024가단123", "가상당사자")
+        store.add_case("다른법원", "2024가단124", "다른당사자")
+        snapshot = {"summary": {"판결 주문": "원고패 일부 50%_확정", "상소사건번호": "2026나456"},
+                    "hearings": [{"day": "2026-12-01", "clock": "10:00", "kind": "변론", "location": "가상301호"}]}
+        with store.db(True) as db:
+            db.execute("UPDATE cases SET snapshot=? WHERE id=?", (json.dumps(snapshot, ensure_ascii=False), key))
+        # Search the JSON values without depending on a particular judgment phrase.
+        for query in ("가상당사자", "2024 가단 123", "가상법원 원고패", "2026나456", "가상301호", "50%_"):
+            data = self.client.get("/api/cases", params={"q": query}).json()
+            self.assertEqual([r["id"] for r in data["cases"]], [key], query)
+        for query in ("없는단어", "' OR 1=1 --", "summary"):
+            data = self.client.get("/api/cases", params={"q": query, "page": 5}).json()
+            self.assertEqual((data["cases"], data["total"], data["page"], data["pages"]), ([], 0, 1, 1))
+
+    def test_bulk_delete_requires_login_and_csrf_and_removes_only_selected_cases(self):
+        store = self.app.state.store
+        keys = [store.add_case("가상법원", f"2024가단{i}", "가상당사자") for i in range(1, 4)]
+        payload = {"ids": [keys[0], keys[2], keys[0], "0" * 32]}
+        self.assertEqual(self.client.post("/api/cases/delete", json=payload).status_code, 401)
+        headers = self.login()
+        self.assertEqual(self.client.post("/api/cases/delete", json=payload).status_code, 403)
+        result = self.client.post("/api/cases/delete", json=payload, headers=headers)
+        self.assertEqual(result.json(), {"deleted": 2})
+        self.assertEqual([r["id"] for r in store.list_cases()], [keys[1]])
+        self.assertEqual(self.client.post("/api/cases/delete", json=payload, headers=headers).json(), {"deleted": 0})
+        for ids in ([], ["invalid"], ["' OR 1=1 --"]):
+            self.assertEqual(self.client.post("/api/cases/delete", json={"ids": ids}, headers=headers).status_code, 422)

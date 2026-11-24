@@ -39,6 +39,23 @@ class StoreTests(unittest.TestCase):
         self.assertFalse(self.store.complete(self.key, first["lease_token"], observed(), self.settings, self.now + 602))
         self.assertTrue(second_store.complete(self.key, second["lease_token"], observed(), self.settings, self.now + 602))
 
+    def test_delete_removes_events_logs_and_ignores_late_worker_results_after_restart(self):
+        self.complete(observed())
+        event = self.store.claim_event(self.now)
+        self.store.request_refresh(self.key, self.now)
+        claim = self.store.claim_case(self.now)
+        other = self.store.add_case("가상법원", "2024가단2", "남은당사자", self.now)
+        self.assertEqual(self.store.delete_cases([self.key, self.key]), 1)
+        self.assertFalse(self.store.complete(self.key, claim["lease_token"], observed(), self.settings, self.now + 1))
+        self.store.fail_case(self.key, claim["lease_token"], "뒤늦은 오류", self.now + 1)
+        self.store.event_failed(event, "뒤늦은 오류", self.now + 1)
+        self.store.event_synced(event, self.now + 1)
+        restored = Store(self.path)
+        self.assertEqual([r["id"] for r in restored.list_cases()], [other])
+        self.assertEqual(restored.case_events(self.key), [])
+        self.assertEqual(restored.logs(), [])
+        self.assertIsNone(restored.claim_event(self.now + 86400))
+
     def test_manual_refresh_during_running_job_is_preserved(self):
         job = self.store.claim_case(self.now)
         self.store.request_refresh(self.key, self.now + 1)

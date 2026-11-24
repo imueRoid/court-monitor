@@ -17,6 +17,21 @@ def encode(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def searchable_text(court, number, party, snapshot):
+    """Search displayed values, including summary/hearings, without field-name guesses."""
+    def values(item):
+        if isinstance(item, dict):
+            return " ".join(values(value) for value in item.values())
+        if isinstance(item, list):
+            return " ".join(values(value) for value in item)
+        return str(item) if item is not None else ""
+
+    observed = json.loads(snapshot)
+    text = " ".join((court, number, party, values(observed.get("summary", {})),
+                     values(observed.get("hearings", []))))
+    return "".join(text.casefold().split())
+
+
 class Store:
     def __init__(self, path):
         self.path = Path(path)
@@ -91,24 +106,59 @@ class Store:
             db.execute("INSERT INTO cases(id,court,case_number,party,next_check,created) VALUES (?,?,?,?,?,?)", (key, court, number, party, now, now))
             return key
 
-    def list_cases(self):
-        with self.db() as db:
-            rows = db.execute("SELECT * FROM cases ORDER BY created DESC").fetchall()
-            events = db.execute("SELECT case_id,payload_hash,synced_hash,last_error FROM events").fetchall()
+    def _case_records(self, db, where="", params=(), paging=""):
+        rows = db.execute("""SELECT c.*,
+            COALESCE(e.pending,0) AS calendar_pending, COALESCE(e.error,'') AS calendar_error
+            FROM cases c LEFT JOIN (
+                SELECT case_id, SUM(payload_hash != synced_hash) AS pending, MAX(last_error) AS error
+                FROM events GROUP BY case_id
+            ) e ON e.case_id=c.id """ + where + " ORDER BY c.created DESC,c.id DESC " + paging, params).fetchall()
         output = []
         for row in rows:
-            record = {k: row[k] for k in ("id", "court", "case_number", "party", "active", "state", "last_checked", "next_check", "last_error", "verdict_day", "verdict_count")}
+            record = {k: row[k] for k in ("id", "court", "case_number", "party", "active", "state", "last_checked", "next_check", "last_error", "verdict_day", "verdict_count", "calendar_pending", "calendar_error")}
             record["observed"] = json.loads(row["snapshot"])
-            related = [e for e in events if e["case_id"] == row["id"]]
-            record["calendar_pending"] = sum(e["payload_hash"] != e["synced_hash"] for e in related)
-            record["calendar_error"] = next((e["last_error"] for e in related if e["last_error"]), "")
             output.append(record)
         return output
+
+    def list_cases(self):
+        with self.db() as db:
+            return self._case_records(db)
+
+    def case_page(self, query="", page=1, page_size=10):
+        terms = ["".join(term.casefold().split()) for term in query.split()]
+        where = "WHERE " + " AND ".join(
+            "instr(searchable_text(c.court,c.case_number,c.party,c.snapshot),?)>0" for _ in terms) if terms else ""
+        with self.db() as db:
+            db.execute("BEGIN")  # Counts and rows belong to the same database snapshot.
+            db.create_function("searchable_text", 4, searchable_text, deterministic=True)
+            total = db.execute("SELECT COUNT(*) FROM cases c " + where, terms).fetchone()[0]
+            pages = max(1, (total + page_size - 1) // page_size)
+            page = min(max(1, page), pages)
+            records = self._case_records(db, where, (*terms, page_size, (page - 1) * page_size), "LIMIT ? OFFSET ?")
+            counts = db.execute("""SELECT COUNT(*) AS total,
+                COALESCE(SUM(active=1 AND state!='done'),0) AS monitoring,
+                COALESCE(SUM(active=1 AND state='awaiting_order'),0) AS waiting FROM cases""").fetchone()
+            metrics = dict(counts)
+            metrics["pending"] = db.execute("SELECT COUNT(*) FROM events WHERE payload_hash!=synced_hash").fetchone()[0]
+        return {"cases": records, "total": total, "page": page, "page_size": page_size,
+                "pages": pages, "metrics": metrics}
 
     def request_refresh(self, key, now=None):
         with self.db(True) as db:
             count = db.execute("UPDATE cases SET manual=1,next_check=? WHERE id=?", (time.time() if now is None else now, key)).rowcount
         return bool(count)
+
+    def delete_cases(self, keys):
+        keys = list(dict.fromkeys(keys))
+        deleted = 0
+        with self.db(True) as db:
+            for start in range(0, len(keys), 500):
+                batch = keys[start:start + 500]
+                placeholders = ",".join("?" for _ in batch)
+                db.execute(f"DELETE FROM events WHERE case_id IN ({placeholders})", batch)
+                db.execute(f"DELETE FROM logs WHERE case_id IN ({placeholders})", batch)
+                deleted += db.execute(f"DELETE FROM cases WHERE id IN ({placeholders})", batch).rowcount
+        return deleted
 
     def set_active(self, key, active, now=None):
         with self.db(True) as db:
@@ -210,9 +260,10 @@ class Store:
     def event_failed(self, event, message, now, retry_after=0):
         delay = max(retry_after, min(3600, 300 * 2 ** min(event["failures"], 5)))
         with self.db(True) as db:
-            db.execute("UPDATE events SET last_error=?,failures=failures+1,next_sync=?,lease_until=0,lease_token='' WHERE id=? AND lease_token=?",
-                       (message[:1000], now + delay, event["id"], event["lease_token"]))
-            self._log(db, event["case_id"], now, "error", "캘린더 동기화 실패: " + message[:800])
+            updated = db.execute("UPDATE events SET last_error=?,failures=failures+1,next_sync=?,lease_until=0,lease_token='' WHERE id=? AND lease_token=?",
+                                 (message[:1000], now + delay, event["id"], event["lease_token"])).rowcount
+            if updated:
+                self._log(db, event["case_id"], now, "error", "캘린더 동기화 실패: " + message[:800])
 
     @staticmethod
     def _log(db, case_id, now, level, message):

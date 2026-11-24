@@ -6,7 +6,7 @@ import re
 import secrets
 import time
 
-from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
@@ -51,6 +51,17 @@ class CaseImport(BaseModel):
 
 class ActiveInput(BaseModel):
     active: bool
+
+
+class CaseDelete(BaseModel):
+    ids: list[str] = Field(min_length=1, max_length=10000)
+
+    @field_validator("ids")
+    @classmethod
+    def check_ids(cls, values):
+        if any(not re.fullmatch(r"[a-f0-9]{32}", value) for value in values):
+            raise ValueError("올바른 사건 ID가 아닙니다.")
+        return values
 
 
 class LoginInput(BaseModel):
@@ -232,12 +243,13 @@ def create_app(settings=None, *, start_worker=True, worker_factory=Worker):
             return RedirectResponse("/?google=error",status_code=303)
 
     @api.get("/cases")
-    def cases():
-        records = store.list_cases()
-        for record in records:
+    def cases(q: str = Query("", max_length=200), page: int = Query(1, ge=1),
+              page_size: int = Query(10, ge=1, le=100)):
+        result = store.case_page(q, page, page_size)
+        for record in result["cases"]:
             upcoming = next_hearing(record["observed"], datetime.now(timezone.utc), settings.timezone)
             record["next_hearing"] = asdict(upcoming) if upcoming else None
-        return {"cases": records, "worker_heartbeat": store.get_meta("worker_heartbeat"),
+        return {**result, "worker_heartbeat": store.get_meta("worker_heartbeat"),
                 "calendar_configured": worker.calendar.configured}
 
     @api.post("/cases", dependencies=[Depends(csrf)])
@@ -248,6 +260,10 @@ def create_app(settings=None, *, start_worker=True, worker_factory=Worker):
     def import_cases(payload: CaseImport):
         ids = [store.add_case(case.court, case.case_number, case.party) for case in payload.cases]
         return {"ids": ids, "count": len(set(ids))}
+
+    @api.post("/cases/delete", dependencies=[Depends(csrf)])
+    def delete_cases(payload: CaseDelete):
+        return {"deleted": store.delete_cases(payload.ids)}
 
     @api.post("/cases/{key}/refresh", dependencies=[Depends(csrf)])
     def refresh(key: str):
