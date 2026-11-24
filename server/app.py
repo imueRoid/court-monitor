@@ -245,9 +245,10 @@ def create_app(settings=None, *, start_worker=True, worker_factory=Worker):
     @api.get("/cases")
     def cases(q: str = Query("", max_length=200), page: int = Query(1, ge=1),
               page_size: int = Query(10, ge=1, le=100)):
-        result = store.case_page(q, page, page_size)
+        now = datetime.now(timezone.utc)
+        result = store.case_page(q, page, page_size, now=now, timezone_name=settings.timezone)
         for record in result["cases"]:
-            upcoming = next_hearing(record["observed"], datetime.now(timezone.utc), settings.timezone)
+            upcoming = next_hearing(record["observed"], now, settings.timezone)
             record["next_hearing"] = asdict(upcoming) if upcoming else None
         return {**result, "worker_heartbeat": store.get_meta("worker_heartbeat"),
                 "calendar_configured": worker.calendar.configured}

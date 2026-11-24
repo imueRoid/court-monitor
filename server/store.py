@@ -10,7 +10,7 @@ import uuid
 from datetime import timedelta
 from zoneinfo import ZoneInfo
 
-from .domain import Hearing, calendar_hearings, event_payload, schedule
+from .domain import Hearing, calendar_hearings, event_payload, next_hearing, schedule
 
 
 def encode(value):
@@ -106,13 +106,13 @@ class Store:
             db.execute("INSERT INTO cases(id,court,case_number,party,next_check,created) VALUES (?,?,?,?,?,?)", (key, court, number, party, now, now))
             return key
 
-    def _case_records(self, db, where="", params=(), paging=""):
+    def _case_records(self, db, where="", params=(), paging="", order_by="c.created DESC,c.id DESC"):
         rows = db.execute("""SELECT c.*,
             COALESCE(e.pending,0) AS calendar_pending, COALESCE(e.error,'') AS calendar_error
             FROM cases c LEFT JOIN (
                 SELECT case_id, SUM(payload_hash != synced_hash) AS pending, MAX(last_error) AS error
                 FROM events GROUP BY case_id
-            ) e ON e.case_id=c.id """ + where + " ORDER BY c.created DESC,c.id DESC " + paging, params).fetchall()
+            ) e ON e.case_id=c.id """ + where + " ORDER BY " + order_by + " " + paging, params).fetchall()
         output = []
         for row in rows:
             record = {k: row[k] for k in ("id", "court", "case_number", "party", "active", "state", "last_checked", "next_check", "last_error", "verdict_day", "verdict_count", "calendar_pending", "calendar_error")}
@@ -124,17 +124,26 @@ class Store:
         with self.db() as db:
             return self._case_records(db)
 
-    def case_page(self, query="", page=1, page_size=10):
+    def case_page(self, query="", page=1, page_size=10, *, now=None, timezone_name="Asia/Seoul"):
+        now = datetime.now(timezone.utc) if now is None else now
+
+        def upcoming_key(snapshot):
+            upcoming = next_hearing(json.loads(snapshot), now, timezone_name)
+            # An undetermined time precedes timed hearings on the same date.
+            return f"{upcoming.day}T{upcoming.clock or '00:00'}" if upcoming else None
+
         terms = ["".join(term.casefold().split()) for term in query.split()]
         where = "WHERE " + " AND ".join(
             "instr(searchable_text(c.court,c.case_number,c.party,c.snapshot),?)>0" for _ in terms) if terms else ""
         with self.db() as db:
             db.execute("BEGIN")  # Counts and rows belong to the same database snapshot.
             db.create_function("searchable_text", 4, searchable_text, deterministic=True)
+            db.create_function("upcoming_key", 1, upcoming_key, deterministic=True)
             total = db.execute("SELECT COUNT(*) FROM cases c " + where, terms).fetchone()[0]
             pages = max(1, (total + page_size - 1) // page_size)
             page = min(max(1, page), pages)
-            records = self._case_records(db, where, (*terms, page_size, (page - 1) * page_size), "LIMIT ? OFFSET ?")
+            records = self._case_records(db, where, (*terms, page_size, (page - 1) * page_size), "LIMIT ? OFFSET ?",
+                                         "upcoming_key(c.snapshot) ASC NULLS LAST,c.created DESC,c.id DESC")
             counts = db.execute("""SELECT COUNT(*) AS total,
                 COALESCE(SUM(active=1 AND state!='done'),0) AS monitoring,
                 COALESCE(SUM(active=1 AND state='awaiting_order'),0) AS waiting FROM cases""").fetchone()

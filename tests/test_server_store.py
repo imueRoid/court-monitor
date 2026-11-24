@@ -56,6 +56,36 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(restored.logs(), [])
         self.assertIsNone(restored.claim_event(self.now + 86400))
 
+    def test_next_hearing_sort_precedes_pagination_and_puts_missing_dates_last(self):
+        moment = datetime.fromtimestamp(self.now, ZoneInfo("Asia/Seoul"))
+        hearings = [
+            [("2026-11-24", "10:00")],
+            [("2026-11-24", "11:00")],
+            [("2026-11-25", "10:00")],
+            [("2026-11-23", "10:00")],
+            [("2026-11-24", "08:00"), ("2026-11-25", "12:00")],
+            [("2026-11-24", "")],
+            [("2026-11-24", "09:00")],
+        ]
+        keys = []
+        for number, dates in enumerate(hearings, 2):
+            key = self.store.add_case("가상법원", f"2024가단{number}", "정렬당사자", self.now + number)
+            keys.append(key)
+            snapshot = {"summary": {}, "hearings": [{"day": day, "clock": clock, "kind": "변론"} for day, clock in dates]}
+            with self.store.db(True) as db:
+                db.execute("UPDATE cases SET snapshot=? WHERE id=?", (json.dumps(snapshot), key))
+        expected = [keys[5], keys[6], keys[0], keys[1], keys[2], keys[4], keys[3], self.key]
+        actual = []
+        for page in range(1, 5):
+            result = self.store.case_page(page=page, page_size=2, now=moment)
+            actual.extend(row["id"] for row in result["cases"])
+        self.assertEqual(actual, expected)
+        searched = self.store.case_page(query="정렬당사자", page_size=2, now=moment)
+        self.assertEqual([row["id"] for row in searched["cases"]], expected[:2])
+        # Once a hearing time passes, the next future hearing determines its position.
+        later = self.store.case_page(page_size=20, now=moment.replace(hour=10, minute=30))
+        self.assertEqual([row["id"] for row in later["cases"]][:4], [keys[5], keys[1], keys[2], keys[4]])
+
     def test_manual_refresh_during_running_job_is_preserved(self):
         job = self.store.claim_case(self.now)
         self.store.request_refresh(self.key, self.now + 1)
