@@ -7,8 +7,14 @@ services:
     platform: linux/amd64
     restart: unless-stopped
     init: true
-    ports:
-      - "7708:8080"
+    network_mode: host
+    command: ["python", "-m", "uvicorn", "server.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "7708", "--workers", "1", "--no-access-log"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7708/health',timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
     environment:
       TZ: Asia/Seoul
       DATABASE_PATH: /data/cases.sqlite3

@@ -17,7 +17,7 @@ SSH로 실행한다면:
 sudo docker compose -f compose.synology.yaml up -d
 ```
 
-NAS가 구형 `docker-compose` 명령을 사용한다면 같은 인수로 실행합니다. 접속은 **호스트 7708 → 컨테이너 8080**입니다.
+NAS가 구형 `docker-compose` 명령을 사용한다면 같은 인수로 실행합니다. **호스트 네트워크(`network_mode: host`)**를 사용하고 프로그램이 NAS의 **7708 포트**에서 직접 수신합니다. `ports` 매핑은 사용하지 않으며 상태 검사도 7708 포트로 수행합니다. 변경된 Compose를 적용할 때는 같은 프로젝트를 재생성합니다.
 
 ## Google 독립 인증
 
