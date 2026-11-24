@@ -2,6 +2,7 @@
 import io
 import json
 import secrets
+import socket
 import subprocess
 import time
 
@@ -27,13 +28,14 @@ def main():
     name = "court-monitor-ci-" + secrets.token_hex(4)
     volume = name + "-data"
     password = secrets.token_urlsafe(32)
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
     try:
         docker("volume", "create", volume)
         docker("run", "-d", "--name", name, "--read-only", "--tmpfs", "/tmp:size=256m,mode=1777",
-               "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "-p", "127.0.0.1::8080",
+               "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "-p", f"127.0.0.1:{port}:8080",
                "-v", volume + ":/data", "-e", "ADMIN_PASSWORD=" + password, "court-monitor:test")
-        mapping = json.loads(docker("inspect", name).stdout)[0]["NetworkSettings"]["Ports"]["8080/tcp"][0]
-        port = mapping["HostPort"]
         wait_ready(port)
         base = f"http://127.0.0.1:{port}"
         session = requests.Session()
@@ -56,6 +58,12 @@ print('Linux OCR model inference passed')
 """
         print(docker("exec", "-i", name, "python", "-", input=ocr).stdout.strip())
         print("Container authentication, persistent SQLite session and OCR checks passed")
+    except Exception:
+        logs = docker("logs", "--tail", "100", name, check=False)
+        print(logs.stdout)
+        print(logs.stderr)
+        print(docker("inspect", "--format", "{{json .State}}", name, check=False).stdout)
+        raise
     finally:
         docker("rm", "-f", name, check=False)
         docker("volume", "rm", volume, check=False)

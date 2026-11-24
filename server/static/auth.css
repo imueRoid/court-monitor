@@ -1,0 +1,7 @@
+table{min-width:1080px}td{word-break:keep-all}.case-link{white-space:nowrap}
+.header-actions{display:flex;align-items:center;gap:20px}
+.login-page{min-height:100vh;display:grid;place-items:center;background:#112f39}
+.login-shell{width:min(460px,100%);padding:24px;margin:0}
+.login-brand{color:white;margin-bottom:24px}.login-brand p{color:#c4d7db}
+.login-form{display:grid;grid-template-columns:1fr;gap:12px}.login-form input{margin-top:0}.login-form button{margin-top:8px}
+summary{cursor:pointer;font-weight:600}details[open] summary{margin-bottom:16px}
