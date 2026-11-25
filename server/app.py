@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from court_client import CaseNumber, CourtError
 from .config import Settings
+from .build_info import get_build_info
 from .auth import Auth
 from .google_oauth import CALLBACK, OAuthError
 from .domain import next_hearing
@@ -83,6 +84,7 @@ class GoogleStartInput(BaseModel):
 
 def create_app(settings=None, *, start_worker=True, worker_factory=Worker):
     settings = settings or Settings.from_env()
+    build = get_build_info()
     store = Store(settings.database)
     auth = Auth(store, settings)
     worker = worker_factory(store, settings)
@@ -101,7 +103,7 @@ def create_app(settings=None, *, start_worker=True, worker_factory=Worker):
         if start_worker:
             worker.stop()
 
-    app = FastAPI(title="사건 일정 관리", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title="사건 일정 관리", version=build["version"], lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.store, app.state.worker, app.state.settings, app.state.auth = store, worker, settings, auth
 
     @app.middleware("http")
@@ -123,7 +125,7 @@ def create_app(settings=None, *, start_worker=True, worker_factory=Worker):
 
     @app.get("/health")
     def health():
-        return {"status": "ok"}
+        return {"status": "ok", **build}
 
     @app.get("/guide/google")
     def google_guide():
@@ -185,7 +187,7 @@ def create_app(settings=None, *, start_worker=True, worker_factory=Worker):
     @api.get("/bootstrap")
     def bootstrap(request: Request):
         return {"csrf_token": auth.csrf_token(auth.token(request)), "timezone": settings.timezone,
-                "session_days": settings.session_days,
+                "session_days": settings.session_days, "build": build,
                 "google": google.status(),
                 "courts": store.get_meta("courts", []), "calendar_configured": worker.calendar.configured,
                 "verdict_checks_per_day": settings.verdict_checks_per_day,

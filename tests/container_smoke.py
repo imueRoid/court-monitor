@@ -1,6 +1,7 @@
 """GitHub Actions: 실제 Linux 이미지에서 인증·DB 재시작·OCR 런타임을 검증한다."""
 import io
 import json
+import os
 import secrets
 import socket
 import subprocess
@@ -38,11 +39,18 @@ def main():
                "-v", volume + ":/data", "court-monitor:test")
         wait_ready(port)
         base = f"http://127.0.0.1:{port}"
+        health = requests.get(base + "/health", timeout=5).json()
+        expected = os.environ["EXPECTED_VERSION"]
+        assert health["version"] == expected
+        labels = json.loads(docker("image", "inspect", "--format", "{{json .Config.Labels}}", "court-monitor:test").stdout)
+        assert labels["org.opencontainers.image.version"] == health["version"]
+        assert labels["org.opencontainers.image.revision"] == health["revision"]
         session = requests.Session()
         assert session.get(base + "/api/cases", timeout=5).status_code == 401
         assert "처음 설정" in session.get(base + "/login", timeout=5).text
         assert session.post(base + "/api/setup", json={"password": password}, timeout=10).ok
         bootstrap = session.get(base + "/api/bootstrap", timeout=5).json()
+        assert bootstrap["build"]["version"] == expected
         assert session.post(base + "/api/logout", json={}, headers={"X-CSRF-Token":bootstrap["csrf_token"]}, timeout=5).ok
         assert "관리자 로그인" in session.get(base + "/login", timeout=5).text
         assert session.post(base + "/api/login", json={"password": password}, timeout=10).ok

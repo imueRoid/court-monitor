@@ -39,6 +39,6 @@ python -m pip install -r requirements-server.txt httpx
 python -m unittest discover -s tests -p 'test_server*.py' -v
 ```
 
-GitHub Actions는 서버·공통 클라이언트 검사 후 Linux 이미지를 빌드하고 실제 컨테이너의 최초 비밀번호 설정·로그인·재시작 세션·OCR 추론을 확인한 뒤 Docker Hub에 게시합니다. `latest`와 `sha-커밋SHA` 태그를 제공합니다. 이미지 게시에는 이 저장소의 Actions secret `DOCKERHUB_TOKEN`을 사용합니다.
+GitHub Actions는 서버·공통 클라이언트 검사 후 Linux 이미지를 빌드하고 실제 컨테이너의 최초 비밀번호 설정·로그인·재시작 세션·OCR 추론을 확인한 뒤 Docker Hub에 게시합니다. `latest`, `1`, `1.0`, `1.0.<빌드번호>`, `sha-커밋SHA` 태그를 제공합니다. 서버 버전은 빌드마다 자동 증가하며 관리 화면 하단과 `/health`에서 확인합니다. 시놀로지용 이미지는 단일 플랫폼 Docker V2 형식으로 게시하고, Compose는 `pull_policy: always`로 재생성 시 새 이미지를 받습니다. 이미지 게시에는 이 저장소의 Actions secret `DOCKERHUB_TOKEN`을 사용합니다.
 
 실제 사건정보, 원문 응답, 보안문자 이미지, 비밀번호, DB와 Google 인증정보는 GitHub·이미지에 포함하지 않습니다. 공식 사이트 구조나 응답이 바뀌면 조회 코드 수정이 필요할 수 있습니다.

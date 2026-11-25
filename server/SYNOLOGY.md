@@ -38,13 +38,28 @@ NAS가 구형 `docker-compose` 명령을 사용한다면 같은 인수로 실행
 
 ## 업데이트와 백업
 
-같은 프로젝트에서 이미지를 새로 받고 재생성합니다.
+배포 이미지는 `latest`, `1`, `1.0`, `1.0.<빌드번호>`, `sha-커밋SHA` 태그를 제공합니다. 숫자 버전의 마지막 자리는 GitHub Actions 실행 번호로 자동 증가합니다. 새 버전은 관리 화면 맨 아래와 `/health`의 `version`·`revision`에서 확인할 수 있습니다. PC 설치 앱의 버전과 Docker 서버 버전은 별개입니다.
+
+시놀로지용 기본 Compose는 계속 `latest`를 사용하고 `pull_policy: always`를 지정합니다. 따라서 새 버전마다 YAML의 이미지 태그를 고칠 필요가 없습니다. 이 정책은 Compose로 프로젝트를 실행·재생성할 때 이미지를 확인하는 설정이며, 실행 중인 컨테이너를 주기적으로 자동 교체하는 기능은 아닙니다. 컨테이너의 단순 재시작이나 NAS 재부팅만으로는 새 이미지가 적용되지 않을 수 있습니다.
+
+Container Manager의 **이미지 → 해당 이미지 선택 → 작업 → 업데이트**로 새 이미지를 받은 뒤 기존 프로젝트를 재생성/빌드합니다. DSM 버전에 따라 메뉴 표현이 다를 수 있습니다. 업데이트 알림이 보이지 않아도 아래처럼 명시적으로 받을 수 있습니다.
+
+**이미 사용 중인 프로젝트의 YAML 파일·프로젝트 이름·네트워크·포트·데이터 볼륨을 그대로 사용합니다.** 기존 설치가 `./court_monitor:/data` 같은 바인드 마운트라면 `court_data:/data`로 바꾸지 않습니다. 새 Compose 파일 전체로 덮어쓰기보다 기존 `court` 서비스에 `pull_policy: always`만 추가하면 됩니다.
 
 ```sh
-sudo docker compose -f compose.synology.yaml pull
-sudo docker compose -f compose.synology.yaml up -d
+# 기존 프로젝트 폴더에서 실행하며, 파일 이름은 실제 프로젝트의 YAML을 사용합니다.
+sudo docker compose -f compose.synology.yaml pull court
+sudo docker compose -f compose.synology.yaml up -d --no-deps --force-recreate court
 ```
+
+Container Manager에서 프로젝트 이름을 별도로 지정했다면 두 명령에 동일한 `-p 기존프로젝트이름`을 추가합니다. Docker Compose v1 환경에서는 `docker-compose` 명령을 사용합니다. 매우 오래된 Compose가 `pull_policy`를 지원하지 않으면 그 한 줄만 제외하고 위의 명시적 pull·재생성 방식을 사용합니다.
+
+`1.0.<빌드번호>`처럼 특정 버전에 고정하면 이후 버전을 자동으로 따라가지 않습니다. 보통은 `latest`를 유지하고, 재현·이전 버전 복귀가 필요한 경우에만 숫자 버전 태그를 선택하세요.
+
+이전 배포에는 숫자 버전과 실행 중인 버전 표시가 없었고 OCI 인덱스에 실행 이미지와 `unknown/unknown` 빌드 증명 항목이 함께 들어 있었습니다. 새 배포는 단일 `linux/amd64` Docker V2 매니페스트로 게시해 형식 호환성을 단순화합니다. 게시 후 CI에서 태그들이 같은 다이제스트인지와 버전 라벨·이미지 형식을 실제 레지스트리 응답으로 검사합니다. Container Manager의 알림이 없다는 이유만으로 새 이미지가 없다고 판단하지 마세요.
 
 프로젝트 이름을 바꾸면 다른 볼륨을 사용할 수 있습니다. `down -v` 또는 볼륨 삭제는 DB·비밀번호·세션·Google 연결까지 지우므로 일반 업데이트에 사용하지 않습니다. 백업은 중지 상태에서 `court_data` 볼륨 전체를 보관하세요. DB와 `credentials.key`를 반드시 함께 복원합니다.
 
 공식 참고: [Synology 프로젝트](https://kb.synology.com/en-global/DSM/help/ContainerManager/docker_project), [Google 웹 OAuth](https://developers.google.com/identity/protocols/oauth2/web-server).
+
+업데이트 참고: [Synology 이미지 관리](https://kb.synology.com/index.php/en-us/DSM/help/ContainerManager/docker_image?version=7), [Docker pull](https://docs.docker.com/reference/cli/docker/compose/pull/), [Docker up](https://docs.docker.com/reference/cli/docker/compose/up/), [이미지 게시 형식](https://docs.docker.com/build/exporters/image-registry/).

@@ -10,6 +10,15 @@ RUN pip install --no-cache-dir -r requirements-server.lock.txt
 COPY court_client.py case_summary.py captcha_ocr.py ./
 COPY server ./server
 RUN mkdir -p /data && chown -R court:court /data /app
+ARG APP_VERSION=development
+ARG VCS_REF=unknown
+ARG BUILD_DATE=unknown
+ENV COURT_MONITOR_VERSION=${APP_VERSION} COURT_MONITOR_REVISION=${VCS_REF} COURT_MONITOR_CREATED=${BUILD_DATE}
+LABEL org.opencontainers.image.title="Court Monitor" \
+      org.opencontainers.image.source="https://github.com/imueRoid/court-monitor" \
+      org.opencontainers.image.version="${APP_VERSION}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.created="${BUILD_DATE}"
 USER 10001:10001
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \

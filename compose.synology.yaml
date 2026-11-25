@@ -4,6 +4,7 @@ version: "3.8"
 services:
   court:
     image: imueroid/court-monitor:latest
+    pull_policy: always
     platform: linux/amd64
     restart: unless-stopped
     init: true

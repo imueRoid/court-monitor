@@ -24,6 +24,23 @@ jobs:
           python-version: '3.12'
           cache: pip
           cache-dependency-path: requirements-server.lock.txt
+      - name: Build release identity
+        id: meta
+        run: |
+          python - <<'PY'
+          from datetime import datetime, timezone
+          import os
+          import re
+          from server.build_info import VERSION_SERIES
+          assert re.fullmatch(r"[0-9]+\.[0-9]+", VERSION_SERIES)
+          version = f"{VERSION_SERIES}.{int(os.environ['GITHUB_RUN_NUMBER'])}"
+          created = datetime.now(timezone.utc).isoformat(timespec="seconds")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              for key, value in {"version": version, "series": VERSION_SERIES,
+                                 "major": VERSION_SERIES.split(".")[0], "created": created}.items():
+                  output.write(f"{key}={value}\n")
+          print("Release version: " + version)
+          PY
       - name: Install test dependencies
         run: python -m pip install -r requirements-server.lock.txt httpx
       - name: Check server and common client
@@ -39,10 +56,18 @@ jobs:
           context: .
           platforms: linux/amd64
           load: true
+          provenance: false
+          sbom: false
+          build-args: |
+            APP_VERSION=${{ steps.meta.outputs.version }}
+            VCS_REF=${{ github.sha }}
+            BUILD_DATE=${{ steps.meta.outputs.created }}
           tags: court-monitor:test
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      - name: Check container login, SQLite restart and OCR runtime
+      - name: Check container login, version, SQLite restart and OCR runtime
+        env:
+          EXPECTED_VERSION: ${{ steps.meta.outputs.version }}
         run: python tests/container_smoke.py
       - name: Log in to Docker Hub
         if: github.event_name != 'pull_request'
@@ -56,13 +81,21 @@ jobs:
         with:
           context: .
           platforms: linux/amd64
-          push: true
+          outputs: type=registry,oci-mediatypes=false
+          provenance: false
+          sbom: false
+          build-args: |
+            APP_VERSION=${{ steps.meta.outputs.version }}
+            VCS_REF=${{ github.sha }}
+            BUILD_DATE=${{ steps.meta.outputs.created }}
           tags: |
             imueroid/court-monitor:latest
+            imueroid/court-monitor:${{ steps.meta.outputs.major }}
+            imueroid/court-monitor:${{ steps.meta.outputs.series }}
+            imueroid/court-monitor:${{ steps.meta.outputs.version }}
             imueroid/court-monitor:sha-${{ github.sha }}
-          labels: |
-            org.opencontainers.image.title=Court Monitor
-            org.opencontainers.image.source=https://github.com/imueRoid/court-monitor
-            org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Verify published format and version aliases
+        if: github.event_name != 'pull_request'
+        run: python tests/verify_published_image.py "${{ steps.meta.outputs.version }}" "${{ github.sha }}"

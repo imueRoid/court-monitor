@@ -60,6 +60,16 @@ class ApiTests(unittest.TestCase):
         exported = self.client.get("/api/export").json()
         self.assertNotIn(self.settings.password, str(exported))
 
+    def test_build_identity_is_consistent_and_contains_no_secrets(self):
+        health = self.client.get("/health").json()
+        self.assertEqual(health["status"], "ok")
+        self.assertTrue(health["version"])
+        self.login()
+        build = self.client.get("/api/bootstrap").json()["build"]
+        self.assertEqual({key: health[key] for key in build}, build)
+        self.assertNotIn(self.settings.password, str(health))
+        self.assertEqual(self.app.version, build["version"])
+
     def test_bootstrap_is_explicit_when_calendar_is_not_connected(self):
         headers = self.login()
         data = self.client.get("/api/bootstrap").json()
