@@ -10,6 +10,26 @@ from server.config import Settings
 
 
 class ApiTests(unittest.TestCase):
+    def test_inline_progress_and_click_refresh_require_auth_and_csrf(self):
+        key = self.app.state.store.add_case("가상법원", "2024가단1", "가상인")
+        path = f"/api/cases/{key}/detail-refresh"
+        self.assertEqual(self.client.post(path, json={}).status_code, 401)
+        headers = self.login()
+        self.assertEqual(self.client.post(path, json={}).status_code, 403)
+        record = self.client.get("/api/cases").json()["cases"][0]
+        self.assertTrue(record["show_progress"])
+        self.assertEqual(record["progress_interval"]["entries"], [])
+        self.assertEqual(self.client.post(path, json={}, headers=headers).json()["reason"], "requested")
+        self.assertTrue(self.client.get("/api/cases").json()["cases"][0]["refresh_pending"])
+        with self.app.state.store.db(True) as db:
+            db.execute("UPDATE cases SET snapshot=? WHERE id=?",
+                       (json.dumps({"summary": {}, "hearings": [{"day": "2099-12-01", "clock": "", "kind": "선고"}]}), key))
+        record = self.client.get("/api/cases").json()["cases"][0]
+        self.assertFalse(record["show_progress"])
+        self.assertIsNone(record["progress_interval"])
+        self.assertEqual(self.client.post(path, json={}, headers=headers).json()["reason"], "verdict")
+        self.assertEqual(self.client.post("/api/cases/missing/detail-refresh", json={}, headers=headers).status_code, 404)
+
     def setUp(self):
         self.folder = tempfile.TemporaryDirectory()
         self.settings = Settings(database=Path(self.folder.name) / "cases.sqlite3", password="test-password-is-long-enough")

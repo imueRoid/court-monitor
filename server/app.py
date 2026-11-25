@@ -16,7 +16,7 @@ from .config import Settings
 from .build_info import get_build_info
 from .auth import Auth
 from .google_oauth import CALLBACK, OAuthError
-from .domain import next_hearing
+from .domain import next_hearing, has_verdict_date, progress_interval
 from .store import Store
 from .worker import Worker
 
@@ -252,6 +252,8 @@ def create_app(settings=None, *, start_worker=True, worker_factory=Worker):
         for record in result["cases"]:
             upcoming = next_hearing(record["observed"], now, settings.timezone)
             record["next_hearing"] = asdict(upcoming) if upcoming else None
+            record["show_progress"] = not has_verdict_date(record["observed"])
+            record["progress_interval"] = progress_interval(record["observed"], now, settings.timezone) if record["show_progress"] else None
         return {**result, "worker_heartbeat": store.get_meta("worker_heartbeat"),
                 "calendar_configured": worker.calendar.configured}
 
@@ -273,6 +275,13 @@ def create_app(settings=None, *, start_worker=True, worker_factory=Worker):
         if not store.request_refresh(key):
             raise HTTPException(404, "등록된 사건이 없습니다.")
         return {"queued": True}
+
+    @api.post("/cases/{key}/detail-refresh", dependencies=[Depends(csrf)])
+    def detail_refresh(key: str):
+        result = store.request_detail_refresh(key)
+        if result is None:
+            raise HTTPException(404, "등록된 사건이 없습니다.")
+        return result
 
     @api.post("/cases/{key}/active", dependencies=[Depends(csrf)])
     def active(key: str, payload: ActiveInput):

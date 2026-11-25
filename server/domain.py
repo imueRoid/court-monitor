@@ -92,10 +92,54 @@ def extract_hearings(result):
     return sorted(hearings.values(), key=lambda h: (h.day, h.clock, h.kind))
 
 
+def extract_progress(result):
+    """Normalize official progress fields; never expose the raw court response."""
+    data = result.get("general", {}).get("data", {})
+    rows = list(data.get("dlt_hrngProgCurst", []) or [])
+    for page in result.get("progress", []):
+        rows.extend(page.get("data", {}).get("dlt_csProgCtt", []) or [])
+    found = {}
+    def text(value):
+        return display_text(value) if isinstance(value, (str, int, float)) else ""
+    for row in rows:
+        day = clean_day(row.get("progYmd"))
+        content = text(row.get("progCtt"))
+        if not content:
+            parts = [text(row.get(key)) for key in ("progCtt1", "progCtt2", "progCtt3", "progDts")]
+            content = " ".join(dict.fromkeys(part for part in parts if part))
+        outcome = text(row.get("progRslt"))
+        if day and (content or outcome):
+            item = {"day": day, "content": content, "result": outcome}
+            found.setdefault((day, content, outcome), item)
+    return sorted(found.values(), key=lambda item: item["day"], reverse=True)
+
+
+def has_verdict_date(observed):
+    return bool(clean_day(observed.get("summary", {}).get("선고일자"))) or any(
+        row.get("kind") == "선고" for row in observed.get("hearings", []))
+
+
+def progress_interval(observed, now, timezone):
+    """Include boundary dates because court progress rows have no time of day."""
+    local = now.astimezone(ZoneInfo(timezone))
+    today = local.date().isoformat()
+    hearings = [Hearing(**row) for row in observed.get("hearings", [])]
+    previous = [h for h in hearings if h.day < today or
+                h.day == today and h.clock and h.moment(timezone) <= now]
+    previous = max(previous, key=lambda h: (h.day, h.clock), default=None)
+    upcoming = next_hearing(observed, now, timezone)
+    end = upcoming.day if upcoming else today
+    rows = [row for row in observed.get("progress", [])
+            if previous and previous.day <= row["day"] <= end]
+    return {"previous": asdict(previous) if previous else None,
+            "next": asdict(upcoming) if upcoming else None,
+            "through": end, "entries": rows}
+
+
 def snapshot(result):
     summary = summarize_case(result)
     return {"summary": summary, "hearings": [asdict(h) for h in extract_hearings(result)],
-            "warnings": result.get("warnings", [])}
+            "progress": extract_progress(result), "warnings": result.get("warnings", [])}
 
 
 def has_order(summary):

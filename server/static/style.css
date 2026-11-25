@@ -15,3 +15,10 @@
 .danger{background:#a83b33;border-color:#a83b33;padding:8px 12px}
 .danger:disabled{cursor:default}
 @media(max-width:540px){:root .case-filters{flex-wrap:wrap}.case-search{flex-basis:100%}.case-detail-row #detail-card{padding:14px}.case-detail-row .section-heading{flex-direction:column;gap:6px}}
+
+#progress-panel{margin-top:20px;border-top:1px solid #dbe5e0;padding-top:12px}
+.progress-entries{list-style:none;margin:12px 0 0;padding:0}
+.progress-entries li{display:grid;grid-template-columns:100px minmax(0,1fr);gap:6px 14px;border-top:1px solid #e1e8e4;padding:12px 0;white-space:pre-wrap;overflow-wrap:anywhere}
+.progress-entries time{color:#52665d;font-variant-numeric:tabular-nums}
+.progress-result{grid-column:2;color:#17664e}
+@media(max-width:540px){.progress-entries li{grid-template-columns:1fr}.progress-result{grid-column:1}}

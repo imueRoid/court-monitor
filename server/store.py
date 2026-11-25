@@ -10,7 +10,7 @@ import uuid
 from datetime import timedelta
 from zoneinfo import ZoneInfo
 
-from .domain import Hearing, calendar_hearings, event_payload, next_hearing, schedule
+from .domain import Hearing, calendar_hearings, event_payload, next_hearing, schedule, has_verdict_date
 
 
 def encode(value):
@@ -28,7 +28,7 @@ def searchable_text(court, number, party, snapshot):
 
     observed = json.loads(snapshot)
     text = " ".join((court, number, party, values(observed.get("summary", {})),
-                     values(observed.get("hearings", []))))
+                     values(observed.get("hearings", [])), values(observed.get("progress", []))))
     return "".join(text.casefold().split())
 
 
@@ -61,6 +61,12 @@ class Store:
                 CREATE INDEX IF NOT EXISTS cases_due ON cases(next_check);
                 CREATE INDEX IF NOT EXISTS events_due ON events(next_sync);
             """)
+
+        # Existing databases upgrade in place; pending jobs and snapshots remain intact.
+        with self.db(True) as db:
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(cases)")}
+            if "detail_refresh_at" not in columns:
+                db.execute("ALTER TABLE cases ADD COLUMN detail_refresh_at REAL NOT NULL DEFAULT 0")
 
     @contextmanager
     def db(self, write=False):
@@ -117,6 +123,7 @@ class Store:
         for row in rows:
             record = {k: row[k] for k in ("id", "court", "case_number", "party", "active", "state", "last_checked", "next_check", "last_error", "verdict_day", "verdict_count", "calendar_pending", "calendar_error")}
             record["observed"] = json.loads(row["snapshot"])
+            record["refresh_pending"] = bool(row["manual"] or row["lease_until"] > time.time())
             output.append(record)
         return output
 
@@ -156,6 +163,24 @@ class Store:
         with self.db(True) as db:
             count = db.execute("UPDATE cases SET manual=1,next_check=? WHERE id=?", (time.time() if now is None else now, key)).rowcount
         return bool(count)
+
+    def request_detail_refresh(self, key, now=None):
+        now = time.time() if now is None else now
+        with self.db(True) as db:
+            row = db.execute("SELECT * FROM cases WHERE id=?", (key,)).fetchone()
+            if row is None:
+                return None
+            observed = json.loads(row["snapshot"])
+            if has_verdict_date(observed):
+                return {"queued": False, "reason": "verdict"}
+            if row["manual"] or row["lease_until"] > now:
+                return {"queued": True, "reason": "pending"}
+            if row["last_checked"] is not None and now - row["last_checked"] < 60 and "progress" in observed:
+                return {"queued": False, "reason": "fresh"}
+            if row["detail_refresh_at"] and now - row["detail_refresh_at"] < 60:
+                return {"queued": False, "reason": "cooldown"}
+            db.execute("UPDATE cases SET manual=1,next_check=?,detail_refresh_at=? WHERE id=?", (now, now, key))
+            return {"queued": True, "reason": "requested"}
 
     def delete_cases(self, keys):
         keys = list(dict.fromkeys(keys))

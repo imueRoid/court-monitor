@@ -3,7 +3,7 @@ import unittest
 from zoneinfo import ZoneInfo
 
 from server.config import Settings
-from server.domain import Hearing, calendar_hearings, event_payload, extract_hearings, next_hearing, schedule, snapshot
+from server.domain import Hearing, calendar_hearings, event_payload, extract_hearings, next_hearing, schedule, snapshot, extract_progress, progress_interval, has_verdict_date
 
 
 ZONE = ZoneInfo("Asia/Seoul")
@@ -20,6 +20,52 @@ def observed(kind="선고", day="2026-11-24", clock="10:00", order="확인되지
 
 
 class DomainTests(unittest.TestCase):
+    def test_progress_normalizes_official_fields_deduplicates_and_sorts(self):
+        row = {"progYmd": "20261123", "progCtt": "<b>준비서면</b><br>접수", "progRslt": "완료"}
+        result = {"general": {"data": {"dlt_hrngProgCurst": [row]}},
+                  "progress": [{"data": {"dlt_csProgCtt": [
+                      row, {"progYmd": "20261124", "progCtt1": "통지서", "progCtt2": "송달", "progCtt3": "송달"},
+                      {"progYmd": "invalid", "progCtt": "제외"},
+                      {"progYmd": "20261124", "secret": "노출 금지"}]}}]}
+        progress = extract_progress(result)
+        self.assertEqual(progress, [
+            {"day": "2026-11-24", "content": "통지서 송달", "result": ""},
+            {"day": "2026-11-23", "content": "준비서면\n접수", "result": "완료"}])
+        self.assertEqual(snapshot(result)["progress"], progress)
+
+    def test_progress_interval_uses_previous_and_next_hearing_not_row_limit(self):
+        data = {"summary": {}, "hearings": [
+            {"day": "2026-11-20", "clock": "10:00", "kind": "변론"},
+            {"day": "2026-11-26", "clock": "10:00", "kind": "변론"},
+            {"day": "2026-12-01", "clock": "10:00", "kind": "변론"}],
+            "progress": [{"day": day, "content": "접수", "result": ""}
+                         for day in ("2026-12-01", "2026-11-26", "2026-11-23", "2026-11-20", "2026-11-19")]}
+        interval = progress_interval(data, moment(), "Asia/Seoul")
+        self.assertEqual(interval["previous"]["day"], "2026-11-20")
+        self.assertEqual(interval["next"]["day"], "2026-11-26")
+        self.assertEqual([row["day"] for row in interval["entries"]], ["2026-11-26", "2026-11-23", "2026-11-20"])
+        data["hearings"] = data["hearings"][:1]
+        interval = progress_interval(data, moment(), "Asia/Seoul")
+        self.assertIsNone(interval["next"])
+        self.assertEqual([row["day"] for row in interval["entries"]], ["2026-11-23", "2026-11-20"])
+        data["hearings"] = []
+        self.assertEqual(progress_interval(data, moment(), "Asia/Seoul")["entries"], [])
+
+    def test_today_hearing_moves_boundary_only_after_its_time(self):
+        data = {"hearings": [{"day": "2026-11-23", "clock": "10:00", "kind": "공판"},
+                             {"day": "2026-11-24", "clock": "14:00", "kind": "공판"}]}
+        before = progress_interval(data, moment(11), "Asia/Seoul")
+        self.assertEqual(before["previous"]["day"], "2026-11-23")
+        self.assertEqual(before["next"]["day"], "2026-11-24")
+        after = progress_interval(data, moment(15), "Asia/Seoul")
+        self.assertEqual(after["previous"]["day"], "2026-11-24")
+        self.assertIsNone(after["next"])
+
+    def test_scheduled_and_actual_verdict_dates_hide_progress(self):
+        self.assertFalse(has_verdict_date({"summary": {"선고일자": "확인되지 않음"}}))
+        self.assertTrue(has_verdict_date({"summary": {"선고일자": "2026.11.24"}}))
+        self.assertTrue(has_verdict_date(observed(day="2026-11-30")))
+
     def test_structured_hearings_and_cancelled_hearing(self):
         result = {"general": {"data": {"dlt_rcntDxdyLst": [
             {"dxdyYmd": "20261125", "dxdyHm": "0930", "dxdyKndNm": "변론기일", "dxdyPlcNm": "101호", "dxdyRsltNm": "변경"},

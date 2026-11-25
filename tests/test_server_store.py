@@ -14,6 +14,36 @@ from test_server_domain import observed
 
 
 class StoreTests(unittest.TestCase):
+    def test_detail_refresh_cooldown_survives_restart_and_does_not_duplicate_running_lookup(self):
+        self.assertEqual(self.store.request_detail_refresh(self.key, self.now)["reason"], "requested")
+        claim = self.store.claim_case(self.now)
+        self.assertEqual(self.store.request_detail_refresh(self.key, self.now + 1)["reason"], "pending")
+        self.store.fail_case(self.key, claim["lease_token"], "일시 오류", self.now + 2)
+        restored = Store(self.path)
+        self.assertEqual(restored.request_detail_refresh(self.key, self.now + 3)["reason"], "cooldown")
+        self.assertEqual(restored.request_detail_refresh(self.key, self.now + 61)["reason"], "requested")
+        self.assertIsNone(restored.request_detail_refresh("missing", self.now))
+
+    def test_fresh_progress_is_reused_and_failed_refresh_keeps_saved_history(self):
+        data = observed(kind="변론")
+        data["progress"] = [{"day": "2026-11-23", "content": "준비서면 접수", "result": ""}]
+        self.complete(data)
+        self.assertEqual(self.store.request_detail_refresh(self.key, self.now + 1)["reason"], "fresh")
+        self.assertEqual(self.store.request_detail_refresh(self.key, self.now + 61)["reason"], "requested")
+        claim = self.store.claim_case(self.now + 61)
+        self.store.fail_case(self.key, claim["lease_token"], "조회 실패", self.now + 62)
+        self.assertEqual(Store(self.path).list_cases()[0]["observed"]["progress"], data["progress"])
+        self.complete(observed(), self.now + 100)
+        self.assertEqual(self.store.request_detail_refresh(self.key, self.now + 101)["reason"], "verdict")
+
+    def test_existing_database_upgrades_without_losing_cases_or_schedules(self):
+        with self.store.db(True) as db:
+            db.execute("ALTER TABLE cases DROP COLUMN detail_refresh_at")
+        restored = Store(self.path)
+        record = restored.list_cases()[0]
+        self.assertEqual((record["id"], record["next_check"]), (self.key, self.now))
+        self.assertEqual(restored.request_detail_refresh(self.key, self.now)["reason"], "requested")
+
     def setUp(self):
         self.folder = tempfile.TemporaryDirectory()
         self.path = Path(self.folder.name) / "cases.sqlite3"

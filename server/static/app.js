@@ -1,5 +1,5 @@
 "use strict";
-const state = {csrf:"", courts:[], cases:[], selected:null, checked:new Set(), deleting:false, config:null, query:"", page:1, pageSize:10, pages:1, total:0, metrics:{}, request:0};
+const state = {csrf:"", courts:[], cases:[], selected:null, checked:new Set(), deleting:false, config:null, query:"", page:1, pageSize:10, pages:1, total:0, metrics:{}, request:0, detailRequests:new Map(), detailErrors:new Map()};
 const $ = id => document.getElementById(id);
 const detailCard = $("detail-card");
 const node = (tag,text,cls) => {const el=document.createElement(tag);if(text!==undefined)el.textContent=text;if(cls)el.className=cls;return el;};
@@ -39,7 +39,7 @@ function renderCases(){
     link.dataset.caseId=row.id;
     link.setAttribute("aria-expanded",String(expanded));
     if(expanded)link.setAttribute("aria-controls","detail-card");
-    link.addEventListener("click",()=>{state.selected=expanded?null:row.id;renderCases();});
+    link.addEventListener("click",()=>{state.selected=expanded?null:row.id;renderCases();if(!expanded&&row.show_progress)refreshDetail(row);});
     caseCell.append(link,node("div",row.court,"muted"));
     const status=node("td");
     status.append(node("span",row.active?(labels[row.state]||row.state):"일시중지",`badge ${row.state==="awaiting_order"?"wait":""} ${row.active?"":"pause"}`));
@@ -94,7 +94,31 @@ $("delete-selected").addEventListener("click",async()=>{
   }catch(error){notice(error.message,true);}
   finally{state.deleting=false;renderSelection();for(const checkbox of document.querySelectorAll("#cases .case-checkbox"))checkbox.disabled=false;}
 });
-function renderDetail(row){detailCard.hidden=false;$("detail-title").textContent=`${row.court} ${row.case_number} · ${row.party}`;$("detail-time").textContent=`최근 확인 ${fmt(row.last_checked)}`;$("detail").replaceChildren();for(const key of ["판결 주문","선고일자","상소제기 여부","상소사건번호"]){$("detail").append(node("dt",key),node("dd",row.observed?.summary?.[key]||"확인되지 않음"));}$("detail-error").textContent=[row.last_error,row.calendar_error,...(row.observed?.warnings||[])].filter(Boolean).join("\n");}
+function renderDetail(row){renderProgress(row);detailCard.hidden=false;$("detail-title").textContent=`${row.court} ${row.case_number} · ${row.party}`;$("detail-time").textContent=`최근 확인 ${fmt(row.last_checked)}`;$("detail").replaceChildren();for(const key of ["판결 주문","선고일자","상소제기 여부","상소사건번호"]){$("detail").append(node("dt",key),node("dd",row.observed?.summary?.[key]||"확인되지 않음"));}$("detail-error").textContent=[row.last_error,row.calendar_error,...(row.observed?.warnings||[])].filter(Boolean).join("\n");}
+function renderProgress(row){
+  $("progress-panel").hidden=!row.show_progress;
+  if(!row.show_progress)return;
+  const interval=row.progress_interval||{};
+  const hearing=h=>h?[h.day,h.clock,h.kind].filter(Boolean).join(" "):"미정";
+  $("progress-range").textContent=interval.previous?"지난 기일: "+hearing(interval.previous)+" → "+(interval.next?"다음 기일: "+hearing(interval.next):"현재까지 ("+interval.through+")")+" · 양쪽 날짜 포함":"지난 기일이 확인되지 않아 조회 구간을 정할 수 없습니다.";
+  const entries=interval.entries||[];
+  $("progress-status").textContent=state.detailErrors.get(row.id)||(row.refresh_pending?"최신 진행 내역을 조회하고 있습니다. 저장된 내역을 먼저 표시합니다.":!("progress" in (row.observed||{}))?"진행 내역을 아직 불러오지 못했습니다.":interval.previous?entries.length?entries.length+"건 · 최신순":"이 구간에 확인된 진행 내역이 없습니다.":"");
+  $("progress-entries").replaceChildren();
+  for(const entry of entries){
+    const item=node("li");
+    item.append(node("time",entry.day),node("div",entry.content||"진행 결과"));
+    if(entry.result)item.append(node("div","결과: "+entry.result,"progress-result"));
+    $("progress-entries").append(item);
+  }
+}
+async function refreshDetail(row){
+  const previous=state.detailRequests.get(row.id)||0;
+  if(Date.now()-previous<60000)return;
+  state.detailRequests.set(row.id,Date.now());
+  state.detailErrors.delete(row.id);
+  try{await api("/cases/"+row.id+"/detail-refresh",{});await reload();}
+  catch(error){state.detailRequests.delete(row.id);state.detailErrors.set(row.id,"최신 조회 요청 실패: "+error.message);if(state.selected===row.id)renderProgress(row);}
+}
 async function reload(){
   const request=++state.request;
   const params=new URLSearchParams({q:state.query,page:state.page,page_size:state.pageSize});
