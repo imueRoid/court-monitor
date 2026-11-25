@@ -7,6 +7,7 @@
 - Google 독립 인증 상세 페이지: 설치 후 `http://NAS-IP:7708/guide/google` 또는 관리 화면의 **처음부터 따라 하는 상세 안내**
 - [안내 페이지 소스](server/static/google-guide.html) — 준비사항·설정 위임 요청문·단계별 설명·오류 해결
 - [일반 Docker 서버 안내](server/README.md), [Windows 프로그램](DESKTOP.md)
+- [Windows PC 설치 앱](WINDOWS-PC.md) — 서버 없이 실행, 설정 탭에서 자동 시작·백그라운드 동작 선택
 - [Docker Hub 이미지](https://hub.docker.com/r/imueroid/court-monitor)
 
 ## 설치

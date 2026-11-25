@@ -77,9 +77,9 @@ def check_redirect(uri):
 
 
 class GoogleConnection:
-    def __init__(self, store, timezone="Asia/Seoul", flow_factory=Flow.from_client_config, session_factory=AuthorizedSession):
+    def __init__(self, store, timezone="Asia/Seoul", flow_factory=Flow.from_client_config, session_factory=AuthorizedSession, vault_factory=Vault):
         self.store, self.timezone = store, timezone
-        self.vault = Vault(store)
+        self.vault = vault_factory(store)
         self.flow_factory, self.session_factory = flow_factory, session_factory
         self._lock = threading.RLock()
         with store.db(True) as db:
