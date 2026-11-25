@@ -16,7 +16,7 @@ from .config import Settings
 from .build_info import get_build_info
 from .auth import Auth
 from .google_oauth import CALLBACK, OAuthError
-from .domain import next_hearing, has_verdict_date, progress_interval
+from .domain import next_hearing, has_order, progress_interval
 from .store import Store
 from .worker import Worker
 
@@ -252,7 +252,7 @@ def create_app(settings=None, *, start_worker=True, worker_factory=Worker):
         for record in result["cases"]:
             upcoming = next_hearing(record["observed"], now, settings.timezone)
             record["next_hearing"] = asdict(upcoming) if upcoming else None
-            record["show_progress"] = not has_verdict_date(record["observed"])
+            record["show_progress"] = not has_order(record["observed"].get("summary", {}))
             record["progress_interval"] = progress_interval(record["observed"], now, settings.timezone) if record["show_progress"] else None
         return {**result, "worker_heartbeat": store.get_meta("worker_heartbeat"),
                 "calendar_configured": worker.calendar.configured}

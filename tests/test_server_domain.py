@@ -3,7 +3,7 @@ import unittest
 from zoneinfo import ZoneInfo
 
 from server.config import Settings
-from server.domain import Hearing, calendar_hearings, event_payload, extract_hearings, next_hearing, schedule, snapshot, extract_progress, progress_interval, has_verdict_date
+from server.domain import Hearing, calendar_hearings, event_payload, extract_hearings, next_hearing, schedule, snapshot, extract_progress, progress_interval, has_verdict_date, normalize_observed
 
 
 ZONE = ZoneInfo("Asia/Seoul")
@@ -43,13 +43,32 @@ class DomainTests(unittest.TestCase):
         interval = progress_interval(data, moment(), "Asia/Seoul")
         self.assertEqual(interval["previous"]["day"], "2026-11-20")
         self.assertEqual(interval["next"]["day"], "2026-11-26")
-        self.assertEqual([row["day"] for row in interval["entries"]], ["2026-11-26", "2026-11-23", "2026-11-20"])
+        self.assertEqual([row["day"] for row in interval["entries"]], ["2026-11-23", "2026-11-20"])
         data["hearings"] = data["hearings"][:1]
         interval = progress_interval(data, moment(), "Asia/Seoul")
         self.assertIsNone(interval["next"])
         self.assertEqual([row["day"] for row in interval["entries"]], ["2026-11-23", "2026-11-20"])
         data["hearings"] = []
-        self.assertEqual(progress_interval(data, moment(), "Asia/Seoul")["entries"], [])
+        self.assertEqual([row["day"] for row in progress_interval(data, moment(), "Asia/Seoul")["entries"]],
+                         ["2026-11-23", "2026-11-20", "2026-11-19"])
+
+    def test_no_previous_hearing_shows_all_actions_from_beginning_without_count_limit(self):
+        data = {"hearings": [{"day": "2026-11-24", "clock": "14:00", "kind": "변론"}],
+                "progress": [{"day": "2026-11-24", "content": "다음 기일 당일", "result": ""},
+                             {"day": "2026-11-23", "content": "미래 기일 전 제출", "result": "접수"}] +
+                            [{"day": "2026-10-01", "content": f"서류 제출 {index}", "result": ""}
+                             for index in range(25)] +
+                            [{"day": "2026-09-01", "content": "소장 접수", "result": ""},
+                             {"day": "2026-09-02", "content": "소장 부본 송달", "result": "도달"}]}
+        interval = progress_interval(data, moment(), "Asia/Seoul")
+        self.assertIsNone(interval["previous"])
+        self.assertEqual(len(interval["entries"]), 28)
+        self.assertTrue(all(row["day"] < "2026-11-24" for row in interval["entries"]))
+        self.assertIn("소장 부본 송달", [row["content"] for row in interval["entries"]])
+        data["hearings"] = []
+        interval = progress_interval(data, moment(), "Asia/Seoul")
+        self.assertEqual(len(interval["entries"]), 29)
+        self.assertIsNone(interval["next"])
 
     def test_today_hearing_moves_boundary_only_after_its_time(self):
         data = {"hearings": [{"day": "2026-11-23", "clock": "10:00", "kind": "공판"},
@@ -65,6 +84,43 @@ class DomainTests(unittest.TestCase):
         self.assertFalse(has_verdict_date({"summary": {"선고일자": "확인되지 않음"}}))
         self.assertTrue(has_verdict_date({"summary": {"선고일자": "2026.11.24"}}))
         self.assertTrue(has_verdict_date(observed(day="2026-11-30")))
+
+    def test_progress_cancellation_removes_structured_verdict_and_saved_schedule(self):
+        for row in ({"progYmd": "20261124", "progCtt": "선고기일(10:00)", "progRslt": "취소"},
+                    {"progYmd": "20261124", "progCtt": "선고기일(10:00) 변경"}):
+            with self.subTest(row=row):
+                result = {"general": {"data": {"dlt_rcntDxdyLst": [
+                    {"dxdyYmd": "20261124", "dxdyHm": "1000", "dxdyKndNm": "선고기일"}]}},
+                    "progress": [{"data": {"dlt_csProgCtt": [row]}}]}
+                data = snapshot(result)
+                self.assertEqual(data["hearings"], [])
+                self.assertEqual(data["cancelled_verdict_days"], ["2026-11-24"])
+                self.assertFalse(has_verdict_date(data))
+                plan = schedule(Settings(), moment(), data, {"verdict_day": "2026-11-24"})
+                self.assertEqual((plan["state"], plan["verdict_day"]), ("monitoring", ""))
+                self.assertEqual(calendar_hearings(data, moment(), "Asia/Seoul"), [])
+                self.assertEqual(data["progress"][0]["day"], "2026-11-24")
+
+    def test_later_trial_supersedes_old_verdict_but_keeps_new_verdict(self):
+        data = observed()
+        data["hearings"].append({"day": "2026-11-26", "clock": "14:00", "kind": "공판"})
+        self.assertFalse(has_verdict_date(data))
+        self.assertEqual(next_hearing(data, moment(8), "Asia/Seoul").kind, "공판")
+        self.assertEqual(schedule(Settings(), moment(), data, {"verdict_day": "2026-11-24"})["verdict_day"], "")
+        data["hearings"].append({"day": "2026-12-10", "clock": "14:00", "kind": "선고"})
+        normalized = normalize_observed(data)
+        self.assertEqual([h["day"] for h in normalized["hearings"] if h["kind"] == "선고"], ["2026-12-10"])
+        self.assertTrue(has_verdict_date(normalized))
+        self.assertEqual(schedule(Settings(), moment(), normalized, {})["verdict_day"], "2026-12-10")
+        self.assertEqual(normalize_observed(normalized), normalized)
+
+    def test_confirmed_judgment_is_preserved_despite_later_trial_date(self):
+        data = observed(order="원고패")
+        data["hearings"].append({"day": "2026-12-01", "clock": "14:00", "kind": "변론"})
+        normalized = normalize_observed(data)
+        self.assertEqual(normalized["summary"]["판결 주문"], "원고패")
+        self.assertEqual(normalized["summary"]["선고일자"], "2026.11.24")
+        self.assertEqual(schedule(Settings(), moment(), normalized, {})["state"], "done")
 
     def test_structured_hearings_and_cancelled_hearing(self):
         result = {"general": {"data": {"dlt_rcntDxdyLst": [

@@ -100,9 +100,10 @@ function renderProgress(row){
   if(!row.show_progress)return;
   const interval=row.progress_interval||{};
   const hearing=h=>h?[h.day,h.clock,h.kind].filter(Boolean).join(" "):"미정";
-  $("progress-range").textContent=interval.previous?"지난 기일: "+hearing(interval.previous)+" → "+(interval.next?"다음 기일: "+hearing(interval.next):"현재까지 ("+interval.through+")")+" · 양쪽 날짜 포함":"지난 기일이 확인되지 않아 조회 구간을 정할 수 없습니다.";
+  $("progress-range").textContent=(interval.previous?"지난 기일: "+hearing(interval.previous)+"부터":"최초 진행 내역부터")+" → "+(interval.next?"다음 기일: "+hearing(interval.next)+" 이전 (다음 기일 당일 제외)":"현재까지 ("+interval.through+")");
+  if(row.observed?.cancelled_verdict_days?.length)$("progress-range").textContent+=" · 취소·변경되었거나 이후 공판·변론이 확인된 기존 선고기일은 제외했습니다.";
   const entries=interval.entries||[];
-  $("progress-status").textContent=state.detailErrors.get(row.id)||(row.refresh_pending?"최신 진행 내역을 조회하고 있습니다. 저장된 내역을 먼저 표시합니다.":!("progress" in (row.observed||{}))?"진행 내역을 아직 불러오지 못했습니다.":interval.previous?entries.length?entries.length+"건 · 최신순":"이 구간에 확인된 진행 내역이 없습니다.":"");
+  $("progress-status").textContent=state.detailErrors.get(row.id)||(row.refresh_pending?"최신 진행 내역을 조회하고 있습니다. 저장된 내역을 먼저 표시합니다.":!("progress" in (row.observed||{}))?"진행 내역을 아직 불러오지 못했습니다.":entries.length?entries.length+"건 · 최신순":"이 구간에 확인된 진행 내역이 없습니다.");
   $("progress-entries").replaceChildren();
   for(const entry of entries){
     const item=node("li");

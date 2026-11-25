@@ -33,8 +33,39 @@ class StoreTests(unittest.TestCase):
         claim = self.store.claim_case(self.now + 61)
         self.store.fail_case(self.key, claim["lease_token"], "조회 실패", self.now + 62)
         self.assertEqual(Store(self.path).list_cases()[0]["observed"]["progress"], data["progress"])
-        self.complete(observed(), self.now + 100)
-        self.assertEqual(self.store.request_detail_refresh(self.key, self.now + 101)["reason"], "verdict")
+        self.complete(observed(order="원고패"), self.now + 100)
+        self.assertEqual(self.store.request_detail_refresh(self.key, self.now + 101)["reason"], "order")
+
+    def test_cancelled_verdict_clears_saved_verdict_and_survives_restart(self):
+        self.complete(observed())
+        self.assertEqual(self.store.list_cases()[0]["state"], "awaiting_order")
+        data = observed(kind="공판", day="2026-12-01")
+        data["cancelled_hearings"] = [{"day": "2026-11-24", "kind": "선고"}]
+        data["progress"] = [{"day": "2026-11-24", "content": "선고기일 취소", "result": "취소"}]
+        self.complete(data, self.now + 61)
+        record = Store(self.path).list_cases()[0]
+        self.assertEqual(record["state"], "monitoring")
+        self.assertEqual(record["verdict_day"], "")
+        self.assertEqual(record["observed"]["cancelled_verdict_days"], ["2026-11-24"])
+        self.assertEqual(record["observed"]["progress"], data["progress"])
+        self.assertEqual(self.store.request_detail_refresh(self.key, self.now + 122)["reason"], "requested")
+
+    def test_cancelled_past_verdict_calendar_event_is_updated_not_left_as_active(self):
+        self.complete(observed())
+        event = self.store.claim_event(self.now)
+        self.store.event_synced(event, self.now)
+        data = observed(kind="공판", day="2026-12-01")
+        data["cancelled_hearings"] = [{"day": "2026-11-24", "kind": "선고"}]
+        self.complete(data, self.now + 7200)
+        pending = self.store.claim_event(self.now + 7200)
+        payload = json.loads(pending["payload"])
+        self.assertTrue(payload["summary"].startswith("[취소·변경]"))
+        self.assertIn("기존 선고기일을 제외", payload["description"])
+        self.assertEqual(self.store.list_cases()[0]["state"], "monitoring")
+        self.store.event_synced(pending, self.now + 7200)
+        self.complete(data, self.now + 7261)
+        stored = self.store.case_events(self.key)
+        self.assertEqual(sum(json.loads(row["payload"])["summary"].startswith("[취소·변경]") for row in stored), 1)
 
     def test_existing_database_upgrades_without_losing_cases_or_schedules(self):
         with self.store.db(True) as db:

@@ -25,9 +25,16 @@ class ApiTests(unittest.TestCase):
             db.execute("UPDATE cases SET snapshot=? WHERE id=?",
                        (json.dumps({"summary": {}, "hearings": [{"day": "2099-12-01", "clock": "", "kind": "선고"}]}), key))
         record = self.client.get("/api/cases").json()["cases"][0]
+        self.assertTrue(record["show_progress"])
+        self.assertIsNotNone(record["progress_interval"])
+        self.assertEqual(self.client.post(path, json={}, headers=headers).json()["reason"], "pending")
+        with self.app.state.store.db(True) as db:
+            db.execute("UPDATE cases SET snapshot=? WHERE id=?",
+                       (json.dumps({"summary": {"판결 주문": "원고패", "선고일자": "2026.11.24"}, "hearings": []}), key))
+        record = self.client.get("/api/cases").json()["cases"][0]
         self.assertFalse(record["show_progress"])
         self.assertIsNone(record["progress_interval"])
-        self.assertEqual(self.client.post(path, json={}, headers=headers).json()["reason"], "verdict")
+        self.assertEqual(self.client.post(path, json={}, headers=headers).json()["reason"], "order")
         self.assertEqual(self.client.post("/api/cases/missing/detail-refresh", json={}, headers=headers).status_code, 404)
 
     def setUp(self):

@@ -10,7 +10,7 @@ import uuid
 from datetime import timedelta
 from zoneinfo import ZoneInfo
 
-from .domain import Hearing, calendar_hearings, event_payload, next_hearing, schedule, has_verdict_date
+from .domain import Hearing, calendar_hearings, event_payload, next_hearing, schedule, has_order, normalize_observed
 
 
 def encode(value):
@@ -122,7 +122,7 @@ class Store:
         output = []
         for row in rows:
             record = {k: row[k] for k in ("id", "court", "case_number", "party", "active", "state", "last_checked", "next_check", "last_error", "verdict_day", "verdict_count", "calendar_pending", "calendar_error")}
-            record["observed"] = json.loads(row["snapshot"])
+            record["observed"] = normalize_observed(json.loads(row["snapshot"]))
             record["refresh_pending"] = bool(row["manual"] or row["lease_until"] > time.time())
             output.append(record)
         return output
@@ -171,8 +171,8 @@ class Store:
             if row is None:
                 return None
             observed = json.loads(row["snapshot"])
-            if has_verdict_date(observed):
-                return {"queued": False, "reason": "verdict"}
+            if has_order(observed.get("summary", {})):
+                return {"queued": False, "reason": "order"}
             if row["manual"] or row["lease_until"] > now:
                 return {"queued": True, "reason": "pending"}
             if row["last_checked"] is not None and now - row["last_checked"] < 60 and "progress" in observed:
@@ -223,6 +223,7 @@ class Store:
             if not row:
                 return False
             moment = datetime.fromtimestamp(now, timezone.utc)
+            observed = normalize_observed(observed)
             plan = schedule(settings, moment, observed, dict(row))
             due = now if row["manual"] else plan["next_check"]
             db.execute("""UPDATE cases SET state=?,snapshot=?,last_checked=?,next_check=?,last_error='',failures=0,
@@ -232,8 +233,26 @@ class Store:
             for hearing in calendar_hearings(observed, moment, settings.timezone):
                 self._observe_event(db, dict(row), hearing, observed["summary"], settings.timezone, now,
                                     signatures, not observed.get("warnings"))
+            self._mark_cancelled_verdicts(db, key, observed["cancelled_verdict_days"], now)
             self._log(db, key, now, "info", "사건정보 조회 완료" + (" · 주문 확인" if plan["state"] == "done" else ""))
             return True
+
+    def _mark_cancelled_verdicts(self, db, key, days, now):
+        if not days:
+            return
+        for event in db.execute("SELECT * FROM events WHERE case_id=?", (key,)).fetchall():
+            hearing = json.loads(event["hearing"])
+            if hearing["kind"] != "선고" or hearing["day"] not in days:
+                continue
+            payload = json.loads(event["payload"])
+            title = payload["summary"]
+            if title.startswith("[취소·변경]"):
+                continue
+            payload["summary"] = "[취소·변경] " + title
+            payload["description"] += "<br><br>기일 취소·변경 또는 이후 공판·변론 재개가 확인되어 기존 선고기일을 제외했습니다."
+            encoded = encode(payload)
+            db.execute("UPDATE events SET payload=?,payload_hash=?,next_sync=?,last_error='',failures=0 WHERE id=?",
+                       (encoded, hashlib.sha256(encoded.encode()).hexdigest(), now, event["id"]))
 
     def _observe_event(self, db, case, hearing, summary, timezone_name, now, signatures, allow_move):
         existing = db.execute("SELECT * FROM events WHERE case_id=? AND signature=?", (case["id"], hearing.signature)).fetchone()
