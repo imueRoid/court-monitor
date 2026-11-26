@@ -1,7 +1,54 @@
 "use strict";
-const state = {csrf:"", courts:[], cases:[], selected:null, checked:new Set(), deleting:false, config:null, query:"", page:1, pageSize:10, pages:1, total:0, metrics:{}, request:0, detailRequests:new Map(), detailErrors:new Map()};
+const state = {csrf:"", courts:[], cases:[], selected:null, checked:new Set(), deleting:false, config:null, calendarConfigured:null, query:"", page:1, pageSize:10, pages:1, total:0, metrics:{}, request:0, detailRequests:new Map(), detailErrors:new Map()};
 const $ = id => document.getElementById(id);
 const detailCard = $("detail-card");
+const dashboardTabs = [$("dashboard-tab"), $("settings-tab")];
+let activeTab = dashboardTabs[0];
+
+function setCalendarConfigured(configured) {
+  state.calendarConfigured = configured;
+  placeGoogleCard();
+}
+
+function placeGoogleCard() {
+  if (state.calendarConfigured === null) return;
+  const onDashboard = activeTab === dashboardTabs[0] && !state.calendarConfigured;
+  const destination = $(onDashboard ? "google-setup" : "google-settings");
+  const card = $("google-card");
+  if (card.parentElement === destination) return;
+  const restoreFocus = card.contains(document.activeElement);
+  destination.append(card);
+  if (restoreFocus) activeTab.focus();
+}
+
+function selectDashboardTab(tab) {
+  activeTab = tab;
+  for (const item of dashboardTabs) {
+    const selected = item === tab;
+    item.setAttribute("aria-selected", String(selected));
+    item.tabIndex = selected ? 0 : -1;
+    $(item.getAttribute("aria-controls")).hidden = !selected;
+  }
+  placeGoogleCard();
+}
+
+for (const tab of dashboardTabs) {
+  tab.addEventListener("click", () => selectDashboardTab(tab));
+  tab.addEventListener("keydown", event => {
+    const otherTab = dashboardTabs.find(item => item !== tab);
+    const destination = {
+      ArrowLeft: otherTab, ArrowRight: otherTab,
+      Home: dashboardTabs[0], End: dashboardTabs[1],
+    }[event.key];
+    if (!destination) return;
+    event.preventDefault();
+    selectDashboardTab(destination);
+    destination.focus();
+  });
+}
+const googleResult = new URLSearchParams(location.search).get("google");
+if (["error", "cancelled"].includes(googleResult)) selectDashboardTab(dashboardTabs[1]);
+
 const node = (tag,text,cls) => {const el=document.createElement(tag);if(text!==undefined)el.textContent=text;if(cls)el.className=cls;return el;};
 const fmt = stamp => stamp ? new Intl.DateTimeFormat("ko-KR",{timeZone:state.config?.timezone||"Asia/Seoul",dateStyle:"short",timeStyle:"short"}).format(new Date(stamp*1000)) : "—";
 const labels={pending:"조회 대기",monitoring:"기일 확인 중",awaiting_order:"주문 확인 대기",done:"주문·종국결과 확인"};
@@ -132,7 +179,13 @@ async function reload(){
   renderCases();
   $("logs").replaceChildren();
   for(const log of logData.logs){const item=node("li");item.append(node("time",fmt(log.at)),node("span",log.message,log.level==="error"?"error":""));$("logs").append(item);}
-  if(!data.calendar_configured)notice("Google Calendar가 아직 연결되지 않았습니다. 위 연결 화면에서 계정을 연결하면 대기 중인 일정을 반영합니다.",true);
+  if (data.calendar_configured !== state.calendarConfigured) {
+    const google = await api("/google/status").catch(() => null);
+    if (request !== state.request) return;
+    if (google) renderGoogle(google, data.calendar_configured);
+    else setCalendarConfigured(data.calendar_configured);
+  }
+  if(!data.calendar_configured)notice("Google Calendar가 아직 연결되지 않았습니다. 계정을 연결하면 대기 중인 일정을 반영합니다.",true);
   else notice(`자동 확인 중 · 선고일 ${state.config.watch_hours[0]}–${state.config.watch_hours[1]}시, ${state.config.verdict_retry_minutes}분 간격 · 하루 최대 ${state.config.verdict_checks_per_day}회`);
 }
 let searchTimer;
@@ -151,4 +204,4 @@ $("import-file").addEventListener("change",async()=>{try{const file=$("import-fi
 $("export").addEventListener("click",async()=>{try{const data=await api("/export");const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:"application/json"}));const link=node("a");link.href=url;link.download="court-cases.json";link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(error){notice(error.message,true);}});
 $("logout").addEventListener("click",async()=>{try{await api("/logout",{});location.assign("/login");}catch(error){notice(error.message,true);}});
 $("password-form").addEventListener("submit",async event=>{event.preventDefault();$("password-message").textContent="";if($("new-password").value!==$("confirm-password").value){$("password-message").textContent="새 비밀번호 확인이 일치하지 않습니다.";return;}$("change-password").disabled=true;try{await api("/password",{current:$("current-password").value,new:$("new-password").value});location.assign("/login?changed=1");}catch(error){$("password-message").textContent=error.message;}finally{$("change-password").disabled=false;}});
-(async()=>{try{const config=await api("/bootstrap");state.config=config;state.csrf=config.csrf_token;const build=config.build;$("build-version").textContent=build?("버전 "+build.version+" · "+build.revision.slice(0,7)):"버전 정보 없음";window.dispatchEvent(new CustomEvent("court-ready",{detail:config.google}));state.courts=config.courts;$("session-info").textContent=`이 기기의 로그인 유지 기간: ${config.session_days}일. 암호와 세션은 서버 DB에서 관리합니다.`;await reload();setInterval(()=>reload().catch(error=>notice(error.message,true)),10000);if(!state.courts.length)setTimeout(async()=>{try{state.courts=(await api("/bootstrap")).courts;}catch{}},10000);}catch(error){notice(error.message,true);}})();
+(async()=>{try{const config=await api("/bootstrap");state.config=config;state.csrf=config.csrf_token;setCalendarConfigured(config.calendar_configured);const build=config.build;$("build-version").textContent=build?("버전 "+build.version+" · "+build.revision.slice(0,7)):"버전 정보 없음";window.dispatchEvent(new CustomEvent("court-ready",{detail:config.google}));state.courts=config.courts;$("session-info").textContent=`이 기기의 로그인 유지 기간: ${config.session_days}일. 암호와 세션은 서버 DB에서 관리합니다.`;await reload();setInterval(()=>reload().catch(error=>notice(error.message,true)),10000);if(!state.courts.length)setTimeout(async()=>{try{state.courts=(await api("/bootstrap")).courts;}catch{}},10000);}catch(error){notice(error.message,true);}})();
