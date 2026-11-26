@@ -51,11 +51,29 @@ if (["error", "cancelled"].includes(googleResult)) selectDashboardTab(dashboardT
 
 const node = (tag,text,cls) => {const el=document.createElement(tag);if(text!==undefined)el.textContent=text;if(cls)el.className=cls;return el;};
 const fmt = stamp => stamp ? new Intl.DateTimeFormat("ko-KR",{timeZone:state.config?.timezone||"Asia/Seoul",dateStyle:"short",timeStyle:"short"}).format(new Date(stamp*1000)) : "—";
-const labels={pending:"조회 대기",monitoring:"기일 확인 중",awaiting_order:"주문 확인 대기",done:"주문·종국결과 확인"};
+const labels={
+  pending:"조회 대기", monitoring:"기일 확인 중", awaiting_verdict:"판결대기 중",
+  checking_order:"주문확인중", decided:"주문·종국결과 확인",
+};
+function judgmentStage(row) {
+  if (row.judgment_stage) return row.judgment_stage;
+  if (row.state === "done") return "decided";
+  if (row.state === "awaiting_order") return "checking_order";
+  return "before_verdict";
+}
+function caseBadge(row) {
+  if (!row.active) return node("span", "일시중지", "badge pause");
+  const stage = judgmentStage(row);
+  const label = stage === "before_verdict" ? (row.state === "pending" ? "pending" : "monitoring") : stage;
+  const waiting = stage === "awaiting_verdict" || stage === "checking_order";
+  return node("span", labels[label], waiting ? "badge wait" : "badge");
+}
 function notice(text,warn=false){$("notice").textContent=text;$("notice").classList.toggle("warn",warn);}
 async function api(path,body){const options={credentials:"same-origin",headers:{}};if(body!==undefined){options.method="POST";options.headers={"Content-Type":"application/json","X-CSRF-Token":state.csrf};options.body=JSON.stringify(body);}const response=await fetch("/api"+path,options);const data=await response.json();if(response.status===401)location.assign("/login");if(!response.ok){let error=data.detail;if(Array.isArray(error))error=error.map(x=>x.msg).join(" / ");throw new Error(typeof error==="string"?error:"서버 요청을 처리하지 못했습니다.");}return data;}
 function button(text,run){const el=node("button",text,"secondary");el.addEventListener("click",async()=>{el.disabled=true;try{await run();await reload();}catch(error){notice(error.message,true);}finally{el.disabled=false;}});return el;}
-function nextHearing(row){return row.next_hearing;}
+function hearingText(hearing) {
+  return [hearing.day, hearing.clock, hearing.kind].filter(Boolean).join(" ");
+}
 function renderCases(){
   const table=$("cases");
   const focusedCase=document.activeElement?.classList.contains("case-link")?document.activeElement.dataset.caseId:null;
@@ -89,13 +107,11 @@ function renderCases(){
     link.addEventListener("click",()=>{state.selected=expanded?null:row.id;renderCases();if(!expanded&&row.show_progress)refreshDetail(row);});
     caseCell.append(link,node("div",row.court,"muted"));
     caseCell.append(node("div",row.case_category||"사건 종류 미확인","muted"));
-    const party=node("td",row.party);
-    party.append(node("div",row.party_role||"역할 미확인","muted"));
     const status=node("td");
-    status.append(node("span",row.active?(labels[row.state]||row.state):"일시중지",`badge ${row.state==="awaiting_order"?"wait":""} ${row.active?"":"pause"}`));
+    status.append(caseBadge(row));
     if(row.last_error)status.append(node("div","조회 오류 · 상세 확인","error"));
-    const hearing=nextHearing(row);
-    const day=node("td",hearing?`${hearing.day} ${hearing.clock} ${hearing.kind}`:"확인된 차회 기일 없음");
+    const hearing=row.next_hearing;
+    const day=node("td",hearing?hearingText(hearing):"확인된 차회 기일 없음");
     const checked=node("td",fmt(row.last_checked));
     checked.append(node("div",`다음: ${row.active?fmt(row.next_check):"일시중지"}`,"muted"));
     const sync=node("td",row.calendar_pending?`${row.calendar_pending}건 대기`:"반영 완료 / 일정 없음");
@@ -104,7 +120,7 @@ function renderCases(){
     const group=node("div",undefined,"row-actions");
     group.append(button("지금 확인",()=>api(`/cases/${row.id}/refresh`,{})),button(row.active?"중지":"재개",()=>api(`/cases/${row.id}/active`,{active:!row.active})));
     actions.append(group);
-    tr.append(checkCell,caseCell,party,status,day,checked,sync,actions);
+    tr.append(checkCell,caseCell,node("td",row.party),status,day,checked,sync,actions);
     table.append(tr);
     if(expanded){
       const detailRow=node("tr",undefined,"case-detail-row");
@@ -144,12 +160,31 @@ $("delete-selected").addEventListener("click",async()=>{
   }catch(error){notice(error.message,true);}
   finally{state.deleting=false;renderSelection();for(const checkbox of document.querySelectorAll("#cases .case-checkbox"))checkbox.disabled=false;}
 });
-function renderDetail(row){renderProgress(row);detailCard.hidden=false;$("detail-title").textContent=`${row.court} ${row.case_number} · ${row.party}`;$("detail-time").textContent=`최근 확인 ${fmt(row.last_checked)}`;$("detail").replaceChildren(node("dt","사건 종류"),node("dd",row.case_category||"확인되지 않음"),node("dt","당사자 역할"),node("dd",row.party_role||"확인되지 않음"));for(const key of ["판결 주문","선고일자","상소제기 여부","상소사건번호"]){$("detail").append(node("dt",key),node("dd",row.observed?.summary?.[key]||"확인되지 않음"));}$("detail-error").textContent=[row.last_error,row.calendar_error,...(row.observed?.warnings||[])].filter(Boolean).join("\n");}
+function renderDetail(row) {
+  renderProgress(row);
+  detailCard.hidden = false;
+  $("detail-title").textContent = `${row.court} ${row.case_number} · ${row.party}`;
+  $("detail-time").textContent = `최근 확인 ${fmt(row.last_checked)}`;
+  const detail = $("detail");
+  detail.replaceChildren(node("dt", "사건 종류"), node("dd", row.case_category || "확인되지 않음"));
+  const stage = judgmentStage(row);
+  if (stage === "checking_order" || stage === "decided") {
+    for (const key of ["판결 주문", "선고일자", "상소제기 여부", "상소사건번호"]) {
+      detail.append(node("dt", key), node("dd", row.observed?.summary?.[key] || "확인되지 않음"));
+    }
+  } else {
+    const next = row.next_hearing;
+    const label = next?.kind === "변론" ? "차회 변론기일" : next?.kind === "선고" ? "차회 선고기일" : "차회 기일";
+    const description = next ? [hearingText(next), next.location].filter(Boolean).join(" · ") : "확인된 차회 기일 없음";
+    detail.append(node("dt", label), node("dd", description));
+  }
+  $("detail-error").textContent = [row.last_error, row.calendar_error, ...(row.observed?.warnings || [])].filter(Boolean).join("\n");
+}
 function renderProgress(row){
   $("progress-panel").hidden=!row.show_progress;
   if(!row.show_progress)return;
   const interval=row.progress_interval||{};
-  const hearing=h=>h?[h.day,h.clock,h.kind].filter(Boolean).join(" "):"미정";
+  const hearing=h=>h?hearingText(h):"미정";
   $("progress-range").textContent=(interval.previous?"지난 기일: "+hearing(interval.previous)+"부터":"최초 진행 내역부터")+" → "+(interval.next?"다음 기일: "+hearing(interval.next)+" 이전 (다음 기일 당일 제외)":"현재까지 ("+interval.through+")");
   if(row.observed?.cancelled_verdict_days?.length)$("progress-range").textContent+=" · 취소·변경되었거나 이후 공판·변론이 확인된 기존 선고기일은 제외했습니다.";
   const entries=interval.entries||[];

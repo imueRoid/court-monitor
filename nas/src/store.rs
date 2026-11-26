@@ -221,6 +221,7 @@ impl Store {
         let mut conn = self.connection()?;
         let time = now();
         let moment = local(time, zone);
+        let today = moment.date_naive().to_string();
         conn.create_scalar_function(
             "searchable_text",
             4,
@@ -286,6 +287,9 @@ impl Store {
         while let Some(row) = rows.next()? {
             let observed = Observation::read(&row.get::<_, String>("snapshot")?)?;
             let number = row.get::<_, String>("case_number")?;
+            let verdict_day: String = row.get("verdict_day")?;
+            let next_hearing = observed.next(moment);
+            let judgment_stage = observed.judgment_stage(&today, next_hearing, &verdict_day);
             let case_category = if observed.case_category.is_empty() {
                 category(&number, "")
             } else {
@@ -294,11 +298,11 @@ impl Store {
             cases.push(json!({"id":row.get::<_,String>("id")?,"court":row.get::<_,String>("court")?,"case_number":number,
                 "party":row.get::<_,String>("party")?,"active":row.get::<_,i64>("active")?,"state":row.get::<_,String>("state")?,
                 "last_checked":row.get::<_,Option<f64>>("last_checked")?,"next_check":row.get::<_,Option<f64>>("next_check")?,
-                "last_error":row.get::<_,String>("last_error")?,"verdict_day":row.get::<_,String>("verdict_day")?,
+                "last_error":row.get::<_,String>("last_error")?,"verdict_day":verdict_day,"judgment_stage":judgment_stage,
                 "verdict_count":row.get::<_,u32>("verdict_count")?,"calendar_pending":row.get::<_,i64>("calendar_pending")?,
                 "calendar_error":row.get::<_,String>("calendar_error")?,"observed":observed,"case_category":case_category,
                 "party_role":observed.party_role,"refresh_pending":row.get::<_,bool>("manual")?||row.get::<_,f64>("lease_until")?>time,
-                "next_hearing":observed.next(moment),"show_progress":!observed.order(),
+                "next_hearing":next_hearing,"show_progress":!observed.order(),
                 "progress_interval":if observed.order(){Value::Null}else{observed.interval(moment)}}));
         }
         let (total, monitoring, waiting): (i64, i64, i64) = db.query_row(
