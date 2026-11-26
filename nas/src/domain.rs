@@ -12,6 +12,24 @@ pub const UNKNOWN: &str = "확인되지 않음";
 pub const UNKNOWN_APPEAL: &str = "제기 내역 확인되지 않음";
 pub const NO_APPEAL: &str = "제기 내역 없음";
 
+pub fn terminal_result(text: &str) -> Option<&str> {
+    let (label, result) = text.split_once([':', '：'])?;
+    matches!(label.trim(), "종국" | "종국결과").then_some(result.trim())
+}
+
+pub fn has_order(text: &str) -> bool {
+    ![
+        "",
+        UNKNOWN,
+        "판결선고",
+        "미확인",
+        "종국",
+        "예정",
+        "판결선고 예정",
+    ]
+    .contains(&terminal_result(text).unwrap_or(text).trim())
+}
+
 #[derive(Clone, Default, Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[serde(default)]
 pub struct Hearing {
@@ -147,7 +165,7 @@ impl Observation {
     }
 
     pub fn order(&self) -> bool {
-        !["", UNKNOWN, "판결선고", "미확인"].contains(&self.text("판결 주문").trim())
+        has_order(self.text("판결 주문"))
     }
 
     pub fn text(&self, field: &str) -> &str {
@@ -192,7 +210,7 @@ impl Observation {
     pub fn normalize(&mut self) {
         self.hearings.retain(|h| !day(&h.day).is_empty());
         for hearing in &self.hearings {
-            if cancelled(&hearing.result) {
+            if terminal_result(&hearing.result).is_none() && cancelled(&hearing.result) {
                 self.cancelled_hearings.insert(Cancelled {
                     day: hearing.day.clone(),
                     kind: hearing.kind.clone(),
@@ -234,11 +252,59 @@ impl Observation {
             if self.cancelled_verdict_days.contains(&actual) {
                 self.summary.insert("선고일자".into(), UNKNOWN.into());
             }
+            if matches!(self.case_category.as_str(), "민사" | "행정") {
+                if let Some((at, result)) = self.reported_terminal_result(continued) {
+                    let at = at.replace('-', ".");
+                    let result = result.to_owned();
+                    self.summary.insert("판결 주문".into(), result);
+                    self.summary.insert("선고일자".into(), at);
+                }
+            }
         }
         self.hearings
             .retain(|h| h.kind != "선고" || !self.cancelled_verdict_days.contains(&h.day));
         self.hearings
             .sort_by(|a, b| (&a.day, &a.clock, &a.kind).cmp(&(&b.day, &b.clock, &b.kind)));
+    }
+
+    fn reported_terminal_result(&self, latest_trial: &str) -> Option<(&str, &str)> {
+        let today = Utc::now()
+            .with_timezone(&chrono_tz::Asia::Seoul)
+            .date_naive()
+            .to_string();
+        let latest_verdict = self
+            .hearings
+            .iter()
+            .filter(|h| h.kind == "선고" && !self.cancelled_verdict_days.contains(&h.day))
+            .map(|h| h.day.as_str())
+            .max()
+            .unwrap_or("");
+        let active_since = latest_trial.max(latest_verdict);
+        let hearings = self
+            .hearings
+            .iter()
+            .map(|h| (&h.day, h.result.as_str(), ""));
+        let progress = self
+            .progress
+            .iter()
+            .flatten()
+            .map(|p| (&p.day, p.result.as_str(), p.content.as_str()));
+        hearings
+            .chain(progress)
+            .filter(|(at, result, content)| {
+                at.as_str() >= active_since
+                    && *at <= &today
+                    && !self.cancelled_verdict_days.contains(*at)
+                    && ![result, content].iter().any(|text| {
+                        terminal_result(text).is_none()
+                            && (cancelled(text) || text.contains("예정"))
+                    })
+            })
+            .filter_map(|(at, result, content)| {
+                let result = terminal_result(result).or_else(|| terminal_result(content))?;
+                (has_order(result) && !day(at).is_empty()).then_some((at.as_str(), result))
+            })
+            .max_by_key(|(at, _)| *at)
     }
 
     pub fn next(&self, now: DateTime<Tz>) -> Option<&Hearing> {

@@ -52,8 +52,8 @@ if (["error", "cancelled"].includes(googleResult)) selectDashboardTab(dashboardT
 const node = (tag,text,cls) => {const el=document.createElement(tag);if(text!==undefined)el.textContent=text;if(cls)el.className=cls;return el;};
 const fmt = stamp => stamp ? new Intl.DateTimeFormat("ko-KR",{timeZone:state.config?.timezone||"Asia/Seoul",dateStyle:"short",timeStyle:"short"}).format(new Date(stamp*1000)) : "—";
 const labels={
-  pending:"조회 대기", monitoring:"기일 확인 중", awaiting_verdict:"판결대기 중",
-  checking_order:"주문확인중", decided:"주문·종국결과 확인",
+  pending:"조회 대기", monitoring:"변론 진행중", awaiting_verdict:"변론 종결됨",
+  checking_order:"주문 확인중", decided:"주문·종국결과 확인",
 };
 function judgmentStage(row) {
   if (row.judgment_stage) return row.judgment_stage;
