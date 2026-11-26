@@ -17,3 +17,5 @@ court-monitor-docker.zip
 credentials.key
 client_secret*.json
 google-service-account*.json
+
+/nas/target/

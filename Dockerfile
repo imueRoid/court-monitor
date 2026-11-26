@@ -1,19 +1,35 @@
-FROM python:3.12-slim-bookworm
+FROM rust:1.100-slim-bookworm AS nas-build
 
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 TZ=Asia/Seoul OMP_NUM_THREADS=1
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libgl1 libglib2.0-0 libgomp1 \
+WORKDIR /build
+COPY nas/Cargo.toml nas/Cargo.lock ./
+COPY nas/src ./src
+RUN cargo build --locked --release
+
+FROM python:3.12-slim-bookworm AS ocr-assets
+
+COPY nas/ocr-assets.requirements nas/extract_ocr_assets.py /build/
+RUN pip download --no-cache-dir --only-binary=:all: --no-deps --require-hashes \
+        -r /build/ocr-assets.requirements -d /build/wheels \
+    && python /build/extract_ocr_assets.py /build/wheels /opt/court-ocr \
+    && rm -rf /build/wheels
+
+FROM debian:bookworm-slim
+
+ENV TZ=Asia/Seoul
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libstdc++6 libgomp1 tzdata \
     && rm -rf /var/lib/apt/lists/* \
-    && groupadd -g 10001 court && useradd -u 10001 -g court -m court
+    && groupadd -g 10001 court && useradd -u 10001 -g court -m court \
+    && mkdir -p /data && chown court:court /data
 WORKDIR /app
-COPY requirements.txt requirements-server.txt requirements-server.lock.txt ./
-RUN pip install --no-cache-dir -r requirements-server.lock.txt
-COPY court_client.py case_summary.py captcha_ocr.py ./
-COPY server ./server
-RUN mkdir -p /data && chown -R court:court /data /app
+COPY --from=nas-build /build/target/release/court-monitor-nas /usr/local/bin/court-monitor-nas
+RUN ln -s court-monitor-nas /usr/local/bin/python
+COPY --from=ocr-assets /opt/court-ocr /opt/court-ocr
+COPY server/static ./server/static
 ARG APP_VERSION=development
 ARG VCS_REF=unknown
 ARG BUILD_DATE=unknown
-ENV COURT_MONITOR_VERSION=${APP_VERSION} COURT_MONITOR_REVISION=${VCS_REF} COURT_MONITOR_CREATED=${BUILD_DATE}
+ARG APP_RUNTIME=development
+ENV COURT_MONITOR_VERSION=${APP_VERSION} COURT_MONITOR_REVISION=${VCS_REF} COURT_MONITOR_CREATED=${BUILD_DATE} COURT_MONITOR_RUNTIME=${APP_RUNTIME}
 LABEL org.opencontainers.image.title="Court Monitor" \
       org.opencontainers.image.source="https://github.com/imueRoid/court-monitor" \
       org.opencontainers.image.version="${APP_VERSION}" \
@@ -22,5 +38,6 @@ LABEL org.opencontainers.image.title="Court Monitor" \
 USER 10001:10001
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health',timeout=3)"
-CMD ["python", "-m", "uvicorn", "server.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8080", "--workers", "1", "--no-access-log"]
+    CMD ["/usr/local/bin/court-monitor-nas", "--healthcheck", "8080"]
+ENTRYPOINT ["/usr/local/bin/court-monitor-nas"]
+CMD ["--host", "0.0.0.0", "--port", "8080"]

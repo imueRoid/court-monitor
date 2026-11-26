@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 from case_summary import format_date, summarize_case
 from court_client import display_text
+from .case_identity import case_identity
 
 
 UNKNOWN = {"", "확인되지 않음", "판결선고", "미확인"}
@@ -177,7 +178,8 @@ def snapshot(result):
     hearings = extract_hearings(result, cancelled=cancelled)
     return normalize_observed({"summary": summary, "hearings": [asdict(h) for h in hearings],
             "cancelled_hearings": [{"day": day, "kind": kind} for day, kind in sorted(cancelled)],
-            "progress": extract_progress(result), "warnings": result.get("warnings", [])})
+            "progress": extract_progress(result), "warnings": result.get("warnings", []),
+            **case_identity(result)})
 
 
 def has_order(summary):

@@ -10,6 +10,7 @@ import uuid
 from datetime import timedelta
 from zoneinfo import ZoneInfo
 
+from .case_identity import case_category
 from .domain import Hearing, calendar_hearings, event_payload, next_hearing, schedule, has_order, normalize_observed
 
 
@@ -28,7 +29,8 @@ def searchable_text(court, number, party, snapshot):
 
     observed = json.loads(snapshot)
     text = " ".join((court, number, party, values(observed.get("summary", {})),
-                     values(observed.get("hearings", [])), values(observed.get("progress", []))))
+                     values(observed.get("hearings", [])), values(observed.get("progress", [])),
+                     observed.get("case_category") or case_category(number), observed.get("party_role") or ""))
     return "".join(text.casefold().split())
 
 
@@ -123,6 +125,8 @@ class Store:
         for row in rows:
             record = {k: row[k] for k in ("id", "court", "case_number", "party", "active", "state", "last_checked", "next_check", "last_error", "verdict_day", "verdict_count", "calendar_pending", "calendar_error")}
             record["observed"] = normalize_observed(json.loads(row["snapshot"]))
+            record["case_category"] = record["observed"].get("case_category") or case_category(row["case_number"])
+            record["party_role"] = record["observed"].get("party_role", "")
             record["refresh_pending"] = bool(row["manual"] or row["lease_until"] > time.time())
             output.append(record)
         return output

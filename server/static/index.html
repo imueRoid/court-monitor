@@ -4,12 +4,17 @@
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <title>사건 일정 관리</title><link rel="stylesheet" href="/static/style.css"><link rel="stylesheet" href="/static/auth.css">
   <script src="/static/app.js" defer></script>
+  <script src="/static/update.js" defer></script>
   <script src="/static/google.js" defer></script>
 </head>
 <body>
   <header><div><span class="eyebrow">COURT MONITOR</span><h1>사건 일정 관리</h1><p>기일을 확인하고, 전용 캘린더에 최신 결과를 반영합니다.</p></div>
     <div class="header-actions"><a href="https://calendar.google.com/" target="_blank" rel="noreferrer">Google Calendar 열기 ↗</a><button id="logout" class="secondary">로그아웃</button></div></header>
   <main>
+    <section id="update-banner" class="notice update-banner" aria-label="앱 업데이트" hidden>
+      <span id="update-message" role="status"></span>
+      <button id="apply-update" type="button" hidden>업데이트 적용</button>
+    </section>
     <div id="notice" class="notice" role="status">서버에 연결하는 중입니다.</div>
     <section class="card" id="google-card"><div class="section-heading"><h2>Google Calendar 연결</h2><a href="/guide/google" target="_blank" rel="noreferrer">처음부터 따라 하는 상세 안내 ↗</a></div><p id="google-status" role="status">연결 상태를 확인하고 있습니다.</p><p class="hint">이 NAS가 Google 계정을 직접 인증합니다. 운영자의 공통 인증 서버로 인증정보를 보내지 않습니다.</p><div class="actions"><button id="google-connect" disabled>Google 계정 연결</button><button id="google-retry" class="secondary" hidden>전용 캘린더 준비 다시 시도</button><button id="google-disconnect" class="secondary" hidden>이 NAS의 연결 해제</button></div><p id="google-message" class="error" role="status"></p><details id="google-client-details"><summary>최초 1회: 내 Google OAuth 앱 등록</summary><p class="hint">상세 안내에 따라 웹 애플리케이션 OAuth 클라이언트를 만들고, 아래 주소를 승인된 리디렉션 URI에 등록합니다. 내려받은 JSON을 선택하면 설정이 이 NAS에 암호화되어 저장됩니다.</p><label>현재 접속 주소의 콜백 URL<input id="google-callback" readonly></label><p id="google-address-hint" class="hint"></p><div class="actions"><button id="copy-callback" class="secondary">콜백 주소 복사</button><button id="google-upload" class="secondary">OAuth JSON 선택하여 등록</button><input id="google-client-file" type="file" accept=".json,application/json" hidden></div></details></section>
     <section class="metrics"><article><span>등록 사건</span><strong id="total">0</strong></article><article><span>자동 확인 중</span><strong id="monitoring">0</strong></article><article><span>주문 확인 대기</span><strong id="waiting">0</strong></article><article><span>캘린더 반영 대기</span><strong id="pending">0</strong></article></section>

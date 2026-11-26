@@ -1,6 +1,6 @@
 # Court Monitor — 사건 일정 관리
 
-대한민국 법원 사건정보를 조회하고 기일·선고 결과를 본인 Google Calendar에 반영하는 웹 프로그램입니다. 웹 서버·조회 작업자·SQLite가 **하나의 Docker 컨테이너**에서 동작합니다.
+대한민국 법원 사건정보를 조회하고 기일·선고 결과를 본인 Google Calendar에 반영하는 웹 프로그램입니다. NAS의 Rust 웹 서버, 법원 조회, ONNX 인식, SQLite와 Google 동기화가 **하나의 Docker 컨테이너**에서 동작합니다.
 
 - [시놀로지용 Compose](compose.synology.yaml) — **수정 없이 실행**, 접속 포트 **7708**
 - [시놀로지 설치 안내](server/SYNOLOGY.md)
@@ -35,11 +35,14 @@ Google OAuth 앱이 External + Testing이면 갱신 토큰이 7일 후 만료될
 ## 개발과 검증
 
 ```sh
+cargo test --locked --manifest-path nas/Cargo.toml
 python -m pip install -r requirements-server.txt httpx
 python -m unittest discover -s tests -p 'test_server*.py' -v
 ```
 
-GitHub Actions는 서버·공통 클라이언트 검사 후 Linux 이미지를 빌드하고 실제 컨테이너의 최초 비밀번호 설정·로그인·재시작 세션·OCR 추론을 확인한 뒤 Docker Hub에 게시합니다. `latest`, `1`, `1.0`, `1.0.<빌드번호>`, `sha-커밋SHA` 태그를 제공합니다. 서버 버전은 빌드마다 자동 증가하며 관리 화면 하단과 `/health`에서 확인합니다. 시놀로지용 이미지는 단일 플랫폼 Docker V2 형식으로 게시하고, Compose는 `pull_policy: always`로 재생성 시 새 이미지를 받습니다. 이미지 게시에는 이 저장소의 Actions secret `DOCKERHUB_TOKEN`을 사용합니다.
+GitHub Actions는 서버·공통 클라이언트 검사와 컨테이너의 최초 비밀번호 설정·재시작 세션·OCR 추론을 검증합니다. 앱 버전은 빌드마다 자동 증가하며 관리 화면 하단과 `/health`에서 확인합니다. Docker Hub에 게시하는 시놀로지용 이미지는 단일 플랫폼 Docker V2 형식이며 `latest`, `1`, `1.0`, `1.0.<빌드번호>`, `sha-커밋SHA` 태그를 제공합니다. 이미지 게시에는 이 저장소의 Actions secret `DOCKERHUB_TOKEN`을 사용합니다.
+
+NAS의 Rust 웹 서버는 호환되는 앱 버전을 재부팅 시 또는 관리 화면에서 적용합니다. 일반 앱 변경은 GitHub Releases에 게시하며, Docker Hub 이미지는 기동 코드나 의존성 등 실행 환경이 바뀔 때 갱신합니다. 최초 적용과 이미지 갱신 절차는 [시놀로지 안내](server/SYNOLOGY.md#업데이트와-백업)를 참고하세요. 앱 패키지에서 SQLite 스키마를 바꿀 때는 이전 앱으로 복귀할 수 있도록 하위 호환성을 유지합니다.
 
 실제 사건정보, 원문 응답, 보안문자 이미지, 비밀번호, DB와 Google 인증정보는 GitHub·이미지에 포함하지 않습니다. 공식 사이트 구조나 응답이 바뀌면 조회 코드 수정이 필요할 수 있습니다.
 
