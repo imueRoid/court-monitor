@@ -2,7 +2,7 @@ use crate::{
     auth::{token, Login},
     court,
     google::CALLBACK,
-    store::{CaseInput, Store},
+    store::{CaseInput, CaseScope, Store},
     web::{error, same_origin, App},
 };
 use anyhow::Result;
@@ -319,6 +319,8 @@ async fn bootstrap(
 struct Filter {
     #[serde(default)]
     q: String,
+    #[serde(default)]
+    scope: CaseScope,
     page: Option<usize>,
     page_size: Option<usize>,
 }
@@ -335,6 +337,7 @@ async fn cases(State(app): State<Arc<App>>, Query(q): Query<Filter>) -> Reply<Js
                 &q.q,
                 page,
                 size,
+                q.scope,
                 app.settings.timezone,
                 app.google.configured()?,
             )

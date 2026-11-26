@@ -1,7 +1,7 @@
 use crate::domain::{self, Cancelled, Hearing, Observation, Progress, UNKNOWN};
 use anyhow::{bail, ensure, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
-use chrono::{Datelike, Local, Utc};
+use chrono::{Datelike, Utc};
 use regex::Regex;
 use reqwest::{redirect, Client, Url};
 use serde_json::{json, Map, Value};
@@ -224,8 +224,11 @@ fn summarize(
     {
         day = domain::day(&plain(&basic["btprtUltmtYmd"]));
     }
+    let today = Utc::now()
+        .with_timezone(&chrono_tz::Asia::Seoul)
+        .date_naive()
+        .to_string();
     if day.is_empty() {
-        let today = Local::now().date_naive().to_string();
         for row in progress
             .into_iter()
             .flat_map(|p| items(&p["dlt_csProgCtt"]))
@@ -243,13 +246,25 @@ fn summarize(
             }
         }
     }
-    let civil = plain(&basic["csUltmtDvsNm"]);
-    if !civil.is_empty() {
-        if day.is_empty() {
-            day = domain::day(&plain(&basic["csUltmtYmd"]));
+    for fields in [Some(basic), progress.map(|data| &data["dma_csBasCtt"])]
+        .into_iter()
+        .flatten()
+    {
+        let civil = plain(&fields["csUltmtDvsNm"]);
+        let result = domain::terminal_result(&civil).unwrap_or(&civil);
+        let closing_day = domain::day(&plain(&fields["csUltmtYmd"]));
+        if !domain::has_order(result) || closing_day > today {
+            continue;
         }
-        if judgment.is_empty() && !day.is_empty() {
-            judgment = civil;
+        if day.is_empty() {
+            day = closing_day.clone();
+        }
+        if !domain::has_order(&judgment) && !day.is_empty() && day <= today {
+            judgment = result.to_owned();
+            if !closing_day.is_empty() {
+                day = closing_day;
+            }
+            break;
         }
     }
     let upper_raw = first(
@@ -434,9 +449,10 @@ fn snapshot(
         hearings.insert(h.signature(), h);
     }
     // Capture cancellations before deduplication so a later row cannot hide a cancellation.
-    for row in
-        items(&data["dlt_rcntDxdyLst"]).filter(|r| domain::cancelled(&plain(&r["dxdyRsltNm"])))
-    {
+    for row in items(&data["dlt_rcntDxdyLst"]).filter(|r| {
+        let result = plain(&r["dxdyRsltNm"]);
+        domain::terminal_result(&result).is_none() && domain::cancelled(&result)
+    }) {
         let day = domain::day(&plain(&row["dxdyYmd"]));
         if !day.is_empty() {
             o.cancelled_hearings.insert(Cancelled {
@@ -459,6 +475,19 @@ fn snapshot(
         let mut content = plain(&row["progCtt"]);
         let parts = ["progCtt1", "progCtt2", "progCtt3", "progDts"].map(|k| plain(&row[k]));
         let text = format!("{content} {}", parts.join(" "));
+        let cancelled_entry = std::iter::once(content.as_str())
+            .chain(parts.iter().map(String::as_str))
+            .any(|part| domain::terminal_result(part).is_none() && domain::cancelled(part));
+        let result = plain(&row["progRslt"]);
+        let result = if domain::terminal_result(&result).is_some() {
+            result
+        } else {
+            parts
+                .iter()
+                .find(|part| domain::terminal_result(part).is_some())
+                .cloned()
+                .unwrap_or(result)
+        };
         if content.is_empty() {
             let mut unique = HashSet::new();
             content = parts
@@ -467,7 +496,6 @@ fn snapshot(
                 .collect::<Vec<_>>()
                 .join(" ");
         }
-        let result = plain(&row["progRslt"]);
         if (!content.is_empty() || !result.is_empty())
             && seen.insert((day.clone(), content.clone(), result.clone()))
         {
@@ -479,8 +507,9 @@ fn snapshot(
         }
         if let Some(m) = HEARING.captures(&text) {
             let kind = domain::kind(&m[1]);
-            let is_cancelled = domain::cancelled(&result)
-                || domain::cancelled(&text)
+            let is_cancelled = domain::terminal_result(&result).is_none()
+                && domain::cancelled(&result)
+                || cancelled_entry
                     && !["신청", "통지서", "제출", "접수"]
                         .iter()
                         .any(|w| text.contains(w));
@@ -904,6 +933,66 @@ mod tests {
         assert_eq!(observation.text("확정 여부"), "확정됨 (2026.02.27)");
         assert_eq!(observation.hearings[0].clock, "14:30");
         assert_eq!(observation.progress.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn civil_and_administrative_endings_are_read_from_progress() {
+        let mut general = json!({"dma_csBasCtt":{"jdgmnOrdCtt":"판결선고"}});
+        let progress =
+            json!({"dma_csBasCtt":{"csUltmtYmd":"20260131","csUltmtDvsNm":"종국 : 원고일부승"}});
+        let read = |general: &Value, progress: &Value, task, number| {
+            snapshot(
+                general,
+                Some(progress),
+                &HashMap::new(),
+                task,
+                number,
+                "가상당사자",
+                Vec::new(),
+            )
+        };
+        let civil = read(&general, &progress, "CV", "2024가단1");
+        assert!(civil.order());
+        assert_eq!(civil.text("판결 주문"), "원고일부승");
+        assert_eq!(civil.text("선고일자"), "2026.01.31");
+
+        let progress = json!({"dlt_csProgCtt":[
+            {"progYmd":"20260131", "progCtt":"선고기일 (10:00)", "progCtt2":"종국：처분취소"},
+            {"progYmd":"20260201", "progCtt":"준비서면에 종국 : 원고승이라고 기재"},
+            {"progYmd":"20991231", "progRslt":"종국 : 원고패"}
+        ]});
+        let administrative = read(&general, &progress, "HS", "2024구합1");
+        assert!(administrative.order());
+        assert_eq!(administrative.text("판결 주문"), "처분취소");
+        assert_eq!(administrative.text("선고일자"), "2026.01.31");
+        assert!(administrative.cancelled_verdict_days.is_empty());
+
+        general["dma_csBasCtt"]["jdgmnOrdCtt"] = json!("명시된 판결 주문");
+        assert_eq!(
+            read(&general, &progress, "HS", "2024구합1").text("판결 주문"),
+            "명시된 판결 주문"
+        );
+    }
+
+    #[test]
+    fn progress_ending_does_not_override_a_later_hearing_or_a_cancellation() {
+        let general = json!({"dlt_rcntDxdyLst":[
+            {"dxdyYmd":"20260131", "dxdyKndNm":"선고기일", "dxdyRsltNm":"종국 : 원고일부승"},
+            {"dxdyYmd":"20260205", "dxdyKndNm":"변론기일"}
+        ]});
+        let progress = json!({"dlt_csProgCtt":[
+            {"progYmd":"20260206", "progCtt":"선고기일 취소", "progRslt":"종국 : 원고패"}
+        ]});
+        let observation = snapshot(
+            &general,
+            Some(&progress),
+            &HashMap::new(),
+            "CV",
+            "2024가단1",
+            "가상당사자",
+            Vec::new(),
+        );
+        assert!(!observation.order());
     }
 
     #[test]

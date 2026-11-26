@@ -33,6 +33,15 @@ pub struct CaseInput {
     pub party: String,
 }
 
+#[derive(Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CaseScope {
+    #[default]
+    All,
+    Ongoing,
+    Finished,
+}
+
 #[derive(Debug)]
 pub struct CaseJob {
     pub id: String,
@@ -216,6 +225,7 @@ impl Store {
         query: &str,
         page: usize,
         size: usize,
+        scope: CaseScope,
         zone: Tz,
         calendar_configured: bool,
     ) -> Result<Value> {
@@ -247,6 +257,12 @@ impl Store {
             },
         )?;
         conn.create_scalar_function(
+            "case_finished",
+            1,
+            FunctionFlags::SQLITE_DETERMINISTIC,
+            |ctx| Ok(Observation::read(&ctx.get::<String>(0)?).is_ok_and(|o| o.order())),
+        )?;
+        conn.create_scalar_function(
             "upcoming_key",
             1,
             FunctionFlags::SQLITE_DETERMINISTIC,
@@ -259,23 +275,42 @@ impl Store {
         )?;
         let db = conn.transaction()?;
         let terms: Vec<String> = query.split_whitespace().map(fold).collect();
-        let filter = if terms.is_empty() {
+        let mut predicates = vec![
+            "instr(searchable_text(c.court,c.case_number,c.party,c.snapshot),?)>0";
+            terms.len()
+        ];
+        match scope {
+            CaseScope::All => {}
+            CaseScope::Ongoing => predicates.push("NOT case_finished(c.snapshot)"),
+            CaseScope::Finished => predicates.push("case_finished(c.snapshot)"),
+        };
+        let filter = if predicates.is_empty() {
             String::new()
         } else {
-            format!(
-                "WHERE {}",
-                vec![
-                    "instr(searchable_text(c.court,c.case_number,c.party,c.snapshot),?)>0";
-                    terms.len()
-                ]
-                .join(" AND ")
-            )
+            format!("WHERE {}", predicates.join(" AND "))
         };
-        let count: i64 = db.query_row(
-            &format!("SELECT COUNT(*) FROM cases c {filter}"),
-            params_from_iter(terms.iter()),
-            |r| r.get(0),
+        let (total, finished, monitoring, waiting): (i64, i64, i64, i64) = db.query_row(
+            "WITH status AS MATERIALIZED (SELECT active,state,case_finished(snapshot) AS finished FROM cases)
+            SELECT COUNT(*),COALESCE(SUM(finished),0),COALESCE(SUM(active=1 AND NOT finished),0),
+            COALESCE(SUM(active=1 AND NOT finished AND state='awaiting_order'),0) FROM status",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )?;
+        let ongoing = total - finished;
+        let scope_total = match scope {
+            CaseScope::All => total,
+            CaseScope::Ongoing => ongoing,
+            CaseScope::Finished => finished,
+        };
+        let count: i64 = if terms.is_empty() {
+            scope_total
+        } else {
+            db.query_row(
+                &format!("SELECT COUNT(*) FROM cases c {filter}"),
+                params_from_iter(terms.iter()),
+                |r| r.get(0),
+            )?
+        };
         let count = usize::try_from(count)?;
         let pages = count.div_ceil(size).max(1);
         let page = page.min(pages);
@@ -306,20 +341,14 @@ impl Store {
                 "next_hearing":next_hearing,"show_progress":!observed.order(),
                 "progress_interval":if observed.order(){Value::Null}else{observed.interval(moment)}}));
         }
-        let (total, monitoring, waiting): (i64, i64, i64) = db.query_row(
-            "SELECT COUNT(*),COALESCE(SUM(active=1 AND state!='done'),0),
-            COALESCE(SUM(active=1 AND state='awaiting_order'),0) FROM cases",
-            [],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-        )?;
         let pending: i64 = db.query_row(
             "SELECT COUNT(*) FROM events WHERE payload_hash!=synced_hash",
             [],
             |r| r.get(0),
         )?;
         Ok(
-            json!({"cases":cases,"total":count,"page":page,"page_size":size,"pages":pages,
-            "metrics":{"total":total,"monitoring":monitoring,"waiting":waiting,"pending":pending},
+            json!({"cases":cases,"total":count,"scope_total":scope_total,"page":page,"page_size":size,"pages":pages,
+            "metrics":{"total":total,"ongoing":ongoing,"monitoring":monitoring,"waiting":waiting,"pending":pending},
             "worker_heartbeat":meta::<Value>(&db,"worker_heartbeat")?,"calendar_configured":calendar_configured}),
         )
     }
@@ -610,6 +639,60 @@ mod tests {
     use crate::domain::UNKNOWN;
 
     #[test]
+    fn case_scopes_follow_confirmed_orders_before_search_and_pagination() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let store = Store::open(&directory.path().join("cases.sqlite3"))?;
+        let ids = store.import(
+            &(1..=4)
+                .map(|number| CaseInput {
+                    court: "가상법원".into(),
+                    case_number: format!("2024가단{number}"),
+                    party: "가상당사자".into(),
+                })
+                .collect::<Vec<_>>(),
+        )?;
+        let saved = [
+            json!({"summary":{"판결 주문":"판결선고"}}),
+            json!({"summary":{"판결 주문":"청구를 기각한다."}}),
+            json!({"case_category":"민사","hearings":[{"day":"2026-01-31","kind":"선고","result":"종국 : 원고일부승"}]}),
+            json!({}),
+        ];
+        store.write(|db| {
+            for (id, snapshot) in ids.iter().zip(&saved) {
+                db.execute(
+                    "UPDATE cases SET snapshot=?1,state='awaiting_order' WHERE id=?2",
+                    params![snapshot.to_string(), id],
+                )?;
+            }
+            Ok(())
+        })?;
+        store.active(&ids[2], false)?;
+        let zone = chrono_tz::Asia::Seoul;
+        let ongoing = store.page("가상당사자", 1, 10, CaseScope::Ongoing, zone, false)?;
+        let ongoing_ids: BTreeSet<_> = ongoing["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ongoing_ids, [&ids[0], &ids[3]].map(String::as_str).into());
+        assert_eq!(ongoing["scope_total"], 2);
+        assert_eq!(ongoing["metrics"]["waiting"], 2);
+        let finished = store.page("가상당사자", 9, 1, CaseScope::Finished, zone, false)?;
+        assert_eq!(finished["total"], 2);
+        assert_eq!(finished["scope_total"], 2);
+        assert_eq!(finished["page"], 2);
+        assert_eq!(finished["cases"].as_array().unwrap().len(), 1);
+        let found = store.page("원고일부승", 1, 10, CaseScope::Finished, zone, false)?;
+        assert_eq!(found["total"], 1);
+        assert_eq!(found["cases"][0]["id"], ids[2]);
+        assert_eq!(found["cases"][0]["judgment_stage"], "decided");
+        let hidden = store.page("원고일부승", 1, 10, CaseScope::Ongoing, zone, false)?;
+        assert_eq!(hidden["total"], 0);
+        Ok(())
+    }
+
+    #[test]
     fn completed_case_can_refresh_appeal_and_finality_on_demand() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let store = Store::open(&directory.path().join("cases.sqlite3"))?;
@@ -649,7 +732,7 @@ mod tests {
             ..Default::default()
         };
         store.complete(&job, refreshed, at, &settings)?;
-        let page = store.page("", 1, 10, settings.timezone, false)?;
+        let page = store.page("", 1, 10, CaseScope::All, settings.timezone, false)?;
         let row = &page["cases"][0];
         let summary = &row["observed"]["summary"];
         assert_eq!(row["judgment_stage"], "decided");
@@ -666,7 +749,7 @@ mod tests {
             .claim_case(at, &settings)?
             .expect("manual refresh queued");
         store.fail_case(&job, "일시적인 조회 실패", at, &settings)?;
-        let page = store.page("", 1, 10, settings.timezone, false)?;
+        let page = store.page("", 1, 10, CaseScope::All, settings.timezone, false)?;
         assert!(page["cases"][0]["next_check"].is_null());
         assert_eq!(page["cases"][0]["last_error"], "일시적인 조회 실패");
         Ok(())
