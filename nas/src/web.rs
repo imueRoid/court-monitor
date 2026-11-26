@@ -1,19 +1,24 @@
 use crate::{
+    api,
+    auth::Auth,
+    config::Settings,
+    google::Google,
     releases::{version, Release, Updates},
-    supervise::{terminate, Listen},
+    store::Store,
+    supervise::Listen,
+    worker,
 };
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use axum::{
-    body::{to_bytes, Body},
-    extract::{ConnectInfo, Path as RoutePath, Request, State},
+    extract::{DefaultBodyLimit, Path as RoutePath, State},
     http::{header, HeaderMap, HeaderValue, StatusCode, Uri},
+    middleware,
     response::{IntoResponse, Response},
     routing::get,
     Json, Router,
 };
-use reqwest::{redirect, Client};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::{
     env,
     net::SocketAddr,
@@ -21,17 +26,19 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use subtle::ConstantTimeEq;
 use tokio::{
     net::TcpListener,
-    process::Command,
     signal::unix::{signal, SignalKind},
     sync::{watch, Mutex},
-    time::{sleep, timeout},
+    time::timeout,
 };
 
-struct App {
-    backend: Client,
+pub struct App {
+    pub settings: Arc<Settings>,
+    pub auth: Arc<Auth>,
+    pub store: Store,
+    pub google: Arc<Google>,
+    pub build: Value,
     updates: Updates,
     installed: String,
     release_cache: Mutex<Option<(Instant, Option<Release>)>>,
@@ -40,78 +47,7 @@ struct App {
     accepted: PathBuf,
 }
 
-async fn proxy(
-    State(app): State<Arc<App>>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    request: Request,
-) -> Response {
-    let (request, body) = request.into_parts();
-    let path = request
-        .uri
-        .path_and_query()
-        .map_or("/", |part| part.as_str());
-    let bytes = match to_bytes(body, 2_000_000).await {
-        Ok(bytes) => bytes,
-        Err(_) => return error(StatusCode::PAYLOAD_TOO_LARGE, "요청 파일이 너무 큽니다."),
-    };
-    let mut headers = request.headers;
-    remove_proxy_headers(&mut headers);
-    headers.insert(
-        "x-forwarded-for",
-        HeaderValue::from_str(&peer.ip().to_string()).unwrap(),
-    );
-    let response = app
-        .backend
-        .request(request.method, format!("http://localhost{path}"))
-        .headers(headers)
-        .body(bytes)
-        .send()
-        .await;
-    match response {
-        Ok(response) => {
-            let status = response.status();
-            let mut headers = response.headers().clone();
-            remove_proxy_headers(&mut headers);
-            let mut output = Response::new(Body::from_stream(response.bytes_stream()));
-            *output.status_mut() = status;
-            *output.headers_mut() = headers;
-            output
-        }
-        Err(_) => error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "사건 관리 서비스를 시작하고 있습니다.",
-        ),
-    }
-}
-
-fn remove_proxy_headers(headers: &mut HeaderMap) {
-    let connection = headers
-        .get_all(header::CONNECTION)
-        .iter()
-        .filter_map(|header| header.to_str().ok())
-        .flat_map(|value| value.split(','))
-        .filter_map(|name| name.trim().parse::<header::HeaderName>().ok())
-        .collect::<Vec<_>>();
-    for name in connection {
-        headers.remove(name);
-    }
-    for name in [
-        "connection",
-        "keep-alive",
-        "proxy-authenticate",
-        "proxy-authorization",
-        "te",
-        "trailer",
-        "transfer-encoding",
-        "upgrade",
-        "forwarded",
-        "x-forwarded-for",
-    ] {
-        headers.remove(name);
-    }
-}
-
-fn error(code: StatusCode, detail: &str) -> Response {
+pub fn error(code: StatusCode, detail: &str) -> Response {
     private((code, Json(json!({"detail": detail}))).into_response())
 }
 
@@ -146,50 +82,7 @@ async fn static_file(RoutePath(file): RoutePath<String>) -> Response {
     }
 }
 
-async fn authenticated(app: &App, headers: &HeaderMap) -> Result<String, Response> {
-    let cookie = headers
-        .get(header::COOKIE)
-        .cloned()
-        .ok_or_else(|| error(StatusCode::UNAUTHORIZED, "로그인이 필요합니다."))?;
-    let response = app
-        .backend
-        .get("http://localhost/api/bootstrap")
-        .header(header::COOKIE, cookie)
-        .send()
-        .await
-        .map_err(|_| {
-            error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "서비스에 연결할 수 없습니다.",
-            )
-        })?;
-    if response.status() == StatusCode::UNAUTHORIZED {
-        return Err(error(StatusCode::UNAUTHORIZED, "로그인이 필요합니다."));
-    }
-    #[derive(Deserialize)]
-    struct Bootstrap {
-        csrf_token: String,
-    }
-    response
-        .error_for_status()
-        .map_err(|_| {
-            error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "서비스에 연결할 수 없습니다.",
-            )
-        })?
-        .json::<Bootstrap>()
-        .await
-        .map(|response| response.csrf_token)
-        .map_err(|_| {
-            error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "로그인 상태를 확인할 수 없습니다.",
-            )
-        })
-}
-
-fn same_origin(headers: &HeaderMap) -> bool {
+pub fn same_origin(headers: &HeaderMap) -> bool {
     let Some(origin) = headers.get(header::ORIGIN) else {
         return true;
     };
@@ -215,10 +108,7 @@ struct Status<'a> {
     status: &'static str,
 }
 
-async fn check(State(app): State<Arc<App>>, headers: HeaderMap) -> Response {
-    if let Err(response) = authenticated(&app, &headers).await {
-        return response;
-    }
+async fn check(State(app): State<Arc<App>>) -> Response {
     let (latest, status) = if !app.updates.enabled(&app.installed) {
         (None, "disabled")
     } else {
@@ -270,25 +160,7 @@ struct Apply {
     version: String,
 }
 
-async fn apply(
-    State(app): State<Arc<App>>,
-    headers: HeaderMap,
-    Json(payload): Json<Apply>,
-) -> Response {
-    let csrf = match authenticated(&app, &headers).await {
-        Ok(csrf) => csrf,
-        Err(response) => return response,
-    };
-    if !same_origin(&headers)
-        || !headers
-            .get("x-csrf-token")
-            .is_some_and(|token| bool::from(token.as_bytes().ct_eq(csrf.as_bytes())))
-    {
-        return error(
-            StatusCode::FORBIDDEN,
-            "요청 인증값이 올바르지 않습니다. 화면을 새로고침하세요.",
-        );
-    }
+async fn apply(State(app): State<Arc<App>>, Json(payload): Json<Apply>) -> Response {
     let Ok(_guard) = app.staging.try_lock() else {
         return error(StatusCode::CONFLICT, "업데이트를 이미 준비하고 있습니다.");
     };
@@ -340,76 +212,44 @@ async fn apply(
     )
 }
 
-async fn wait_for_backend(backend: &Client, child: &mut tokio::process::Child) -> Result<()> {
-    timeout(Duration::from_secs(30), async {
-        loop {
-            if let Some(status) = child.try_wait()? {
-                bail!("court services stopped before startup ({status})");
-            }
-            if let Ok(response) = backend.get("http://localhost/health").send().await {
-                if response.status().is_success() {
-                    return Ok(());
-                }
-            }
-            sleep(Duration::from_millis(100)).await;
-        }
-    })
-    .await
-    .context("court services did not become ready")?
-}
-
 pub async fn run(directory: &Path, listen: Listen) -> Result<bool> {
     let mut term = signal(SignalKind::terminate())?;
     let mut interrupt = signal(SignalKind::interrupt())?;
     let listener = TcpListener::bind((listen.host.as_str(), listen.port)).await?;
-    let socket = directory.join("court.sock");
-    let python = env::var_os("COURT_MONITOR_PYTHON").unwrap_or_else(|| "python".into());
-    let mut backend_process = Command::new(python)
-        .args([
-            "-m",
-            "uvicorn",
-            "server.app:create_app",
-            "--factory",
-            "--uds",
-        ])
-        .arg(&socket)
-        .args([
-            "--workers",
-            "1",
-            "--no-access-log",
-            "--proxy-headers",
-            "--forwarded-allow-ips",
-            "*",
-        ])
-        .kill_on_drop(true)
-        .spawn()?;
-    let backend = Client::builder()
-        .unix_socket(socket)
-        .no_proxy()
-        .redirect(redirect::Policy::none())
-        .timeout(Duration::from_secs(25))
-        .build()?;
-    tokio::select! {
-        result = wait_for_backend(&backend, &mut backend_process) => result?,
-        _ = term.recv() => { terminate(&mut backend_process).await; return Ok(false); },
-        _ = interrupt.recv() => { terminate(&mut backend_process).await; return Ok(false); },
-    }
     let (restart, mut requested) = watch::channel(false);
+    let installed = env::var("COURT_MONITOR_VERSION").unwrap_or_else(|_| "development".into());
+    let settings = Arc::new(Settings::from_env()?);
+    let store = Store::open(&settings.database)?;
+    let auth = Arc::new(Auth::new(store.clone(), &settings)?);
+    let google = Arc::new(Google::new(store.clone(), settings.clone())?);
+    tokio::fs::metadata("server/static/index.html")
+        .await
+        .context("application assets missing")?;
     let app = Arc::new(App {
-        backend,
+        store: store.clone(),
+        settings: settings.clone(),
+        auth,
+        google: google.clone(),
+        build: json!({"version":installed,
+           "revision":env::var("COURT_MONITOR_REVISION").unwrap_or_else(|_|"unknown".into()),
+           "created":env::var("COURT_MONITOR_CREATED").unwrap_or_default()}),
         updates: Updates::from_env()?,
-        installed: env::var("COURT_MONITOR_VERSION").unwrap_or_else(|_| "development".into()),
+        installed,
         release_cache: Mutex::new(None),
         staging: Mutex::new(()),
         restart,
         accepted: directory.join("accepted"),
     });
-    let router = Router::new()
+    let protected = api::protected()
         .route("/api/update", get(check).post(apply))
+        .route_layer(middleware::from_fn_with_state(app.clone(), api::authorize));
+    let router = Router::new()
         .route("/static/{file}", get(static_file))
-        .fallback(proxy)
-        .with_state(app);
-    tokio::fs::write(directory.join("ready"), b"").await?;
+        .merge(api::public())
+        .merge(protected)
+        .with_state(app)
+        .layer(DefaultBodyLimit::max(2_000_000))
+        .layer(middleware::from_fn(api::security));
     let (shutdown, mut stop_server) = watch::channel(false);
     let mut server = tokio::spawn(async move {
         axum::serve(
@@ -421,20 +261,24 @@ pub async fn run(directory: &Path, listen: Listen) -> Result<bool> {
         })
         .await
     });
+    tokio::fs::write(directory.join("ready"), b"").await?;
+    let court = tokio::spawn(worker::court(store, settings));
+    let calendar = tokio::spawn(worker::calendar(google));
     let mut restart = false;
-    tokio::select! {
-        result = &mut server => { result??; },
-        _ = term.recv() => {},
-        _ = interrupt.recv() => {},
-        _ = requested.changed() => { restart = *requested.borrow(); },
-        result = backend_process.wait() => { bail!("court services stopped ({})", result?); },
+    let result = tokio::select! {
+        result=&mut server=>result.map_err(anyhow::Error::from).and_then(|result|result.map_err(Into::into)),
+        _=term.recv()=>Ok(()),
+        _=interrupt.recv()=>Ok(()),
+        _=requested.changed()=>{restart=*requested.borrow(); Ok(())},
     };
+    court.abort();
+    calendar.abort();
     if !server.is_finished() {
         shutdown.send_replace(true);
         if timeout(Duration::from_secs(10), &mut server).await.is_err() {
             server.abort();
         }
     }
-    terminate(&mut backend_process).await;
+    result?;
     Ok(restart)
 }

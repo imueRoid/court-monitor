@@ -8,6 +8,7 @@ import subprocess
 import time
 
 import requests
+from PIL import Image, ImageDraw, ImageFont
 
 
 def docker(*args, input=None, check=True):
@@ -58,17 +59,16 @@ def main():
         docker("restart", name)
         wait_ready(port)
         assert session.get(base + "/api/cases", timeout=5).ok, "Session did not survive restart"
-        ocr = """import io
-from PIL import Image, ImageDraw, ImageFont
-import ddddocr
-image=Image.new('RGB',(180,60),'white')
-ImageDraw.Draw(image).text((5,5),'123456',fill='black',font=ImageFont.load_default(size=32))
-stream=io.BytesIO(); image.save(stream,format='PNG')
-engine=ddddocr.DdddOcr(show_ad=False); engine.set_ranges('0123456789')
-assert isinstance(engine.classification(stream.getvalue()),str)
-print('Linux OCR model inference passed')
-"""
-        print(docker("exec", "-i", name, "python", "-", input=ocr).stdout.strip())
+        # A generated image checks the model without querying a real case.
+        image = Image.new("RGB", (200, 64), "white")
+        ImageDraw.Draw(image).text((10, 5), "123456", fill="black", font=ImageFont.load_default(size=40))
+        stream = io.BytesIO()
+        image.save(stream, format="PNG")
+        ocr = subprocess.run(["docker", "exec", "-i", name, "/bin/sh", "-c",
+            "cat >/tmp/ocr-test.png && court-monitor-nas --ocr-smoke /tmp/ocr-test.png"],
+            input=stream.getvalue(), capture_output=True, check=True)
+        assert ocr.stdout.decode().strip() == "123456", ocr
+        docker("exec", name, "/bin/sh", "-c", "! command -v python && ! command -v python3")
         print("Container authentication, persistent SQLite session and OCR checks passed")
     except Exception:
         logs = docker("logs", "--tail", "100", name, check=False)

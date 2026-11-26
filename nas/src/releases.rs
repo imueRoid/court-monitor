@@ -265,13 +265,7 @@ fn allowed(path: &Path) -> bool {
     }
     let suffix = path.extension().and_then(|ext| ext.to_str());
     match parts.as_slice() {
-        [Component::Normal(file)] => matches!(
-            file.to_str(),
-            Some(EXECUTABLE | "court_client.py" | "case_summary.py" | "captcha_ocr.py")
-        ),
-        [Component::Normal(folder), Component::Normal(_)] => {
-            folder == &"server" && suffix == Some("py")
-        }
+        [Component::Normal(file)] => file == &EXECUTABLE,
         [Component::Normal(folder), Component::Normal(subfolder), Component::Normal(_)] => {
             folder == &"server"
                 && subfolder == &"static"
@@ -309,14 +303,7 @@ fn unpack(data: Vec<u8>, target: &Path) -> Result<()> {
             file.set_permissions(fs::Permissions::from_mode(0o755))?;
         }
     }
-    for required in [
-        EXECUTABLE,
-        "server/app.py",
-        "server/static/index.html",
-        "court_client.py",
-        "case_summary.py",
-        "captcha_ocr.py",
-    ] {
+    for required in [EXECUTABLE, "server/static/index.html"] {
         ensure!(
             target.join(required).is_file(),
             "incomplete release package"
@@ -332,16 +319,9 @@ mod tests {
 
     fn archive(extra: Option<&str>) -> Vec<u8> {
         let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
-        for path in [
-            EXECUTABLE,
-            "server/app.py",
-            "server/static/index.html",
-            "court_client.py",
-            "case_summary.py",
-            "captcha_ocr.py",
-        ]
-        .into_iter()
-        .chain(extra)
+        for path in [EXECUTABLE, "server/static/index.html"]
+            .into_iter()
+            .chain(extra)
         {
             writer
                 .start_file(path, SimpleFileOptions::default())

@@ -2,7 +2,7 @@
 
 시놀로지에서 소스 빌드 없이 **7708 포트**로 실행하려면 [시놀로지 설치 안내](SYNOLOGY.md)와 저장소 루트의 `compose.synology.yaml`을 사용하세요. 아래는 소스에서 직접 빌드하는 설정입니다.
 
-기존 사건검색 프로그램의 조회 코드를 사용하는 서버 버전입니다. 웹에서 사건을 등록하면 서버가 차회 기일을 확인해 **사건 관리 전용 Google Calendar**에 반영합니다. 선고일에는 주문이 올라오는지 다시 확인하고, 주문이 확인되면 기존 선고 일정의 설명을 갱신합니다.
+NAS 컨테이너는 Rust로 웹 API, 법원 조회, ONNX 인식, 사건 예약, SQLite 및 Google Calendar 동기화를 실행합니다. 웹에서 사건을 등록하면 서버가 차회 기일을 확인해 **사건 관리 전용 Google Calendar**에 반영합니다. 선고일에는 주문이 올라오는지 다시 확인하고, 주문이 확인되면 기존 선고 일정의 설명을 갱신합니다.
 
 Synology 전용 기능은 사용하지 않습니다. Linux x86_64 Docker 호스트에서 같은 패키지로 운영하도록 작성했습니다. Synology Container Manager도 같은 CPU·Docker 조건을 충족하면 배포 대상이 될 수 있습니다. ARM64 이미지 실행은 검증하지 않았습니다.
 
@@ -119,6 +119,7 @@ docker compose up -d --build
 개발 환경 검사:
 
 ```sh
+cargo test --locked --manifest-path nas/Cargo.toml
 python -m pip install -r requirements-server.txt httpx
 python -m unittest discover -s tests -p 'test_server*.py' -v
 ```

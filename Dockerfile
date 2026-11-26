@@ -5,19 +5,25 @@ COPY nas/Cargo.toml nas/Cargo.lock ./
 COPY nas/src ./src
 RUN cargo build --locked --release
 
-FROM python:3.12-slim-bookworm
+FROM python:3.12-slim-bookworm AS ocr-assets
 
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 TZ=Asia/Seoul OMP_NUM_THREADS=1
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libgl1 libglib2.0-0 libgomp1 \
+COPY nas/ocr-assets.requirements nas/extract_ocr_assets.py /build/
+RUN pip download --no-cache-dir --only-binary=:all: --no-deps --require-hashes \
+        -r /build/ocr-assets.requirements -d /build/wheels \
+    && python /build/extract_ocr_assets.py /build/wheels /opt/court-ocr \
+    && rm -rf /build/wheels
+
+FROM debian:bookworm-slim
+
+ENV TZ=Asia/Seoul
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libstdc++6 libgomp1 tzdata \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -g 10001 court && useradd -u 10001 -g court -m court \
     && mkdir -p /data && chown court:court /data
 WORKDIR /app
 COPY --from=nas-build /build/target/release/court-monitor-nas /usr/local/bin/court-monitor-nas
-COPY court_client.py case_summary.py captcha_ocr.py ./
-COPY server ./server
-COPY requirements-server.lock.txt ./
-RUN pip install --no-cache-dir -r requirements-server.lock.txt
+COPY --from=ocr-assets /opt/court-ocr /opt/court-ocr
+COPY server/static ./server/static
 ARG APP_VERSION=development
 ARG VCS_REF=unknown
 ARG BUILD_DATE=unknown
@@ -31,6 +37,6 @@ LABEL org.opencontainers.image.title="Court Monitor" \
 USER 10001:10001
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health',timeout=3)"
+    CMD ["/usr/local/bin/court-monitor-nas", "--healthcheck", "8080"]
 ENTRYPOINT ["/usr/local/bin/court-monitor-nas"]
 CMD ["--host", "0.0.0.0", "--port", "8080"]

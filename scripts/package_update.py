@@ -10,12 +10,11 @@ ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = "court-monitor-app-linux-amd64.zip"
 MANIFEST = "court-monitor-update.json"
 RUNTIME_FILES = (
-    ".dockerignore", "Dockerfile", "requirements-server.lock.txt",
+    ".dockerignore", "Dockerfile", "nas/ocr-assets.requirements", "nas/extract_ocr_assets.py",
     "nas/Cargo.toml", "nas/Cargo.lock", "nas/src/main.rs",
     "nas/src/releases.rs", "nas/src/supervise.rs",
     "scripts/package_update.py",
 )
-APPLICATION_FILES = ("court_client.py", "case_summary.py", "captcha_ocr.py")
 
 
 def runtime_id():
@@ -29,10 +28,8 @@ def runtime_id():
 def package(output, binary, version, revision, created):
     output.mkdir(parents=True, exist_ok=True)
     archive = output / PACKAGE
-    sources = [ROOT / name for name in APPLICATION_FILES]
-    sources.extend((ROOT / "server").glob("*.py"))
-    sources.extend(path for path in (ROOT / "server/static").iterdir()
-                   if path.suffix in {".html", ".css", ".js"})
+    sources = (path for path in (ROOT / "server/static").iterdir()
+               if path.suffix in {".html", ".css", ".js"})
     with ZipFile(archive, "w", ZIP_DEFLATED) as compressed:
         compressed.write(binary, "court-monitor-nas")
         for path in sorted(sources):

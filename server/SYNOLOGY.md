@@ -38,7 +38,15 @@ NAS가 구형 `docker-compose` 명령을 사용한다면 같은 인수로 실행
 
 ## 업데이트와 백업
 
-Rust NAS 웹 서버가 들어 있는 Docker 이미지로 처음 한 번 업데이트하세요. 아래의 이미지 갱신 절차에서 기존 프로젝트 이름, 포트, 데이터 볼륨을 그대로 사용합니다. Rust 서버가 웹 접속과 앱 업데이트를 처리하며 기존 조회·OCR·SQLite·Google Calendar 기능은 컨테이너 안의 호환 서비스로 실행됩니다.
+Rust NAS 이미지로 처음 한 번 업데이트하세요. Rust 서버가 웹 접속, 법원 조회, ONNX 인식, SQLite, Google Calendar, 앱 업데이트를 처리합니다. 기존 프로젝트 이름, 7708 포트, `/data`에 연결한 볼륨을 사용하면 사건 데이터와 로그인 세션, Google 연결을 이어서 사용할 수 있습니다.
+
+기존 프로젝트의 `command` 또는 상태 검사가 `python`을 사용하는 경우, 새 [시놀로지 설정](../compose.synology.yaml)의 `command`와 `healthcheck.test`를 아래와 같이 반영한 뒤 새 이미지로 컨테이너를 재생성합니다.
+
+```yaml
+command: ["--host", "0.0.0.0", "--port", "7708"]
+healthcheck:
+  test: ["CMD", "/usr/local/bin/court-monitor-nas", "--healthcheck", "7708"]
+```
 
 ### 평소 앱 업데이트
 
@@ -55,7 +63,7 @@ Rust NAS 웹 서버가 들어 있는 Docker 이미지로 처음 한 번 업데�
 
 Container Manager의 **이미지 → 해당 이미지 선택 → 작업 → 업데이트**로 새 이미지를 받은 뒤 기존 프로젝트를 재생성/빌드합니다. DSM 버전에 따라 메뉴 표현이 다를 수 있습니다. 업데이트 알림이 보이지 않아도 아래처럼 명시적으로 받을 수 있습니다.
 
-**이미 사용 중인 프로젝트의 YAML 파일·프로젝트 이름·네트워크·포트·데이터 볼륨을 그대로 사용합니다.** 기존 설치가 `./court_monitor:/data` 같은 바인드 마운트라면 `court_data:/data`로 바꾸지 않습니다. 새 Compose 파일 전체로 덮어쓰기보다 기존 `court` 서비스에 `pull_policy: always`만 추가하면 됩니다.
+Rust 이미지로 전환한 뒤에는 같은 YAML 파일과 프로젝트 이름으로 이미지 갱신을 실행합니다. 기존 설치의 네트워크와 포트, 데이터 볼륨을 사용하세요. `./court_monitor:/data` 같은 바인드 마운트도 같은 경로를 사용합니다. 기존 `court` 서비스에 `pull_policy: always`가 빠져 있으면 추가할 수 있습니다.
 
 ```sh
 # 기존 프로젝트 폴더에서 실행하며, 파일 이름은 실제 프로젝트의 YAML을 사용합니다.

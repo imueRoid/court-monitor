@@ -9,9 +9,9 @@ services:
     restart: unless-stopped
     init: true
     network_mode: host
-    command: ["python", "-m", "uvicorn", "server.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "7708", "--workers", "1", "--no-access-log"]
+    command: ["--host", "0.0.0.0", "--port", "7708"]
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7708/health',timeout=3)"]
+      test: ["CMD", "/usr/local/bin/court-monitor-nas", "--healthcheck", "7708"]
       interval: 30s
       timeout: 5s
       start_period: 60s

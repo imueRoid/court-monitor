@@ -5,7 +5,6 @@ from pathlib import Path
 import shutil
 import socket
 import subprocess
-import sys
 import tempfile
 import time
 import unittest
@@ -13,6 +12,9 @@ import unittest
 import requests
 
 from server.store import Store
+from server.auth import Auth
+from server.config import Settings
+from server.google_oauth import Vault
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,19 +30,24 @@ class NativeNasTests(unittest.TestCase):
             store = Store(database)
             key = store.add_case("가상법원", "2024구합1", "가상당사자")
             store.set_active(key, False)
+            legacy_auth = Auth(store, Settings(database=database, password="fixture-password"))
+            legacy_session = legacy_auth.new_session()
+            store.set_meta("google_mode", "oauth")
+            store.set_meta("google_calendar", {"id": "fixture-calendar", "summary": "기존 캘린더"})
+            vault = Vault(store)
             with socket.socket() as socket_probe:
                 socket_probe.bind(("127.0.0.1", 0))
                 port = socket_probe.getsockname()[1]
             base = f"http://127.0.0.1:{port}"
             runtime = "a" * 64
             environment = {
-                **os.environ, "PYTHONDONTWRITEBYTECODE": "1",
-                "COURT_MONITOR_PYTHON": str(Path(sys.executable).absolute()),
+                **os.environ,
                 "COURT_MONITOR_VERSION": "1.0.1", "COURT_MONITOR_RUNTIME": runtime,
                 "COURT_AUTO_UPDATE": "false", "DATABASE_PATH": str(database),
             }
             session = requests.Session()
             session.trust_env = False
+            session.cookies.set("court_session", legacy_session, domain="127.0.0.1", path="/")
 
             def start(expected_version, create=None):
                 binary = str(Path(BINARY).resolve())
@@ -83,10 +90,29 @@ class NativeNasTests(unittest.TestCase):
                             server.wait()
 
             def login():
-                self.assertEqual(session.get(base + "/api/update", timeout=2).status_code, 401)
-                self.assertTrue(session.post(base + "/api/setup", json={"password": "fixture-password"}, timeout=3).ok)
+                self.assertEqual(requests.get(base + "/api/update", timeout=2).status_code, 401)
+                bootstrap = session.get(base + "/api/bootstrap", timeout=2).json()
+                self.assertEqual(bootstrap["csrf_token"], legacy_auth.csrf_token(legacy_session))
+                self.assertEqual(bootstrap["google"]["calendar_id"], "fixture-calendar")
+                redirect_uri = base + "/oauth/google/callback"
+                vault.set("google_client", {"client_id": "fixture.apps.googleusercontent.com",
+                    "client_secret": "fixture-only", "redirect_uris": [redirect_uri],
+                    "auth_uri": "https://accounts.google.com/o/oauth2/v2/auth",
+                    "token_uri": "https://oauth2.googleapis.com/token"})
+                headers = {"X-CSRF-Token": bootstrap["csrf_token"], "Origin": base}
+                connected = session.post(base + "/api/google/start", headers=headers,
+                    json={"redirect_uri": redirect_uri}, timeout=3)
+                self.assertEqual(connected.status_code, 200)
+                from urllib.parse import parse_qs, urlsplit
+                query = parse_qs(urlsplit(connected.json()["url"]).query)
+                self.assertEqual(query["code_challenge_method"], ["S256"])
+                callback = session.get(redirect_uri, params={"state":query["state"][0],"error":"access_denied"},
+                    allow_redirects=False, timeout=2)
+                self.assertEqual(callback.headers["Location"], "/?google=cancelled")
                 unauthorized = session.post(base + "/api/update", json={"version": "1.0.2"}, timeout=2)
                 self.assertEqual(unauthorized.status_code, 403)
+                self.assertTrue(session.post(base + "/api/login", headers={"Origin": base},
+                    json={"password": "fixture-password"}, timeout=10).ok)
 
             def stage(version, *, broken=False):
                 updates = data / "app-updates"
@@ -98,9 +124,7 @@ class NativeNasTests(unittest.TestCase):
                     executable.chmod(0o755)
                 else:
                     shutil.copy2(BINARY, executable)
-                    shutil.copytree(ROOT / "server", source / "server", ignore=shutil.ignore_patterns("__pycache__"))
-                    for path in ("court_client.py", "case_summary.py", "captcha_ocr.py"):
-                        shutil.copy2(ROOT / path, source)
+                    shutil.copytree(ROOT / "server" / "static", source / "server" / "static")
                 (source / "release.json").write_text(json.dumps({
                     "version": version, "revision": "b" * 40, "created": "2026-01-01T00:00:00Z",
                     "runtime": runtime, "sha256": "c" * 64,

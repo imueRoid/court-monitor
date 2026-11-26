@@ -1,6 +1,6 @@
 # Court Monitor — 사건 일정 관리
 
-대한민국 법원 사건정보를 조회하고 기일·선고 결과를 본인 Google Calendar에 반영하는 웹 프로그램입니다. 웹 서버·조회 작업자·SQLite가 **하나의 Docker 컨테이너**에서 동작합니다.
+대한민국 법원 사건정보를 조회하고 기일·선고 결과를 본인 Google Calendar에 반영하는 웹 프로그램입니다. NAS의 Rust 웹 서버, 법원 조회, ONNX 인식, SQLite와 Google 동기화가 **하나의 Docker 컨테이너**에서 동작합니다.
 
 - [시놀로지용 Compose](compose.synology.yaml) — **수정 없이 실행**, 접속 포트 **7708**
 - [시놀로지 설치 안내](server/SYNOLOGY.md)
@@ -35,6 +35,7 @@ Google OAuth 앱이 External + Testing이면 갱신 토큰이 7일 후 만료될
 ## 개발과 검증
 
 ```sh
+cargo test --locked --manifest-path nas/Cargo.toml
 python -m pip install -r requirements-server.txt httpx
 python -m unittest discover -s tests -p 'test_server*.py' -v
 ```
