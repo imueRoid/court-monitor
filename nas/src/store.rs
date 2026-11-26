@@ -389,6 +389,27 @@ impl Store {
         Ok(list)
     }
 
+    pub fn resume_no_hearing_cancelled_cases(&self, at: f64, settings: &Settings) -> Result<()> {
+        self.write(|db| {
+            let mut stmt = db.prepare("SELECT id,snapshot,verdict_day,state,active FROM cases WHERE state IN ('done','awaiting_order')")?;
+            let rows = stmt.query_map([], |r| Ok((r.get::<_,String>(0)?, r.get::<_,String>(1)?,
+                r.get::<_,String>(2)?, r.get::<_,String>(3)?, r.get::<_,bool>(4)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            let moment = local(at, settings.timezone);
+            for (id, raw, remembered, state, active) in rows {
+                let Ok(mut observed) = serde_json::from_str::<Observation>(&raw) else { continue; };
+                if !observed.has_no_hearing_judgment_cancellation() { continue; }
+                observed.normalize();
+                let plan = schedule(settings, moment, &observed, &remembered, 0, "");
+                if plan.state == "done" || plan.state == state && plan.verdict_day == remembered { continue; }
+                let due = if !active { None } else if plan.state == "monitoring" { Some(at) } else { plan.next };
+                db.execute("UPDATE cases SET state=?1,snapshot=?2,next_check=?3,verdict_day=?4,verdict_count=?5,verdict_count_day=?6 WHERE id=?7",
+                    params![plan.state,serde_json::to_string(&observed)?,due,plan.verdict_day,plan.count,plan.count_day,id])?;
+            }
+            Ok(())
+        })
+    }
+
     pub fn claim_case(&self, at: f64, s: &Settings) -> Result<Option<CaseJob>> {
         self.write(|db| {
             let mut stmt = db.prepare("SELECT id,court,case_number,party,state,manual,verdict_count_day,verdict_count
@@ -637,6 +658,69 @@ fn append_text(value: &Value, text: &mut String) {
 mod tests {
     use super::*;
     use crate::domain::UNKNOWN;
+
+    #[test]
+    fn reopens_saved_no_hearing_cancellations_and_queues_active_cases() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let store = Store::open(&directory.path().join("cases.sqlite3"))?;
+        let settings = Settings::from_env()?;
+        let date = "2026-01-31";
+        let ids = store.import(
+            &(1..=4)
+                .map(|n| CaseInput {
+                    court: "가상법원".into(),
+                    case_number: format!("2024가단{n}"),
+                    party: "가상당사자".into(),
+                })
+                .collect::<Vec<_>>(),
+        )?;
+        let saved = [
+            (
+                "done",
+                true,
+                json!({"summary":{"판결 주문":"무변론판결취소","선고일자":date}}),
+            ),
+            (
+                "done",
+                false,
+                json!({"summary":{"판결 주문":"종국 : 무변론판결취소","선고일자":date}}),
+            ),
+            (
+                "awaiting_order",
+                true,
+                json!({"progress":[{"day":date,"content":"판결선고기일 (10:00)","result":"무변론판결취소"}]}),
+            ),
+            (
+                "done",
+                true,
+                json!({"summary":{"판결 주문":"원고일부승","선고일자":"2026-02-05"},"progress":[{"day":date,"content":"판결선고기일 (10:00)","result":"무변론판결취소"}]}),
+            ),
+        ];
+        store.write(|db| {
+            for (id, (state, active, snapshot)) in ids.iter().zip(saved) {
+                db.execute("UPDATE cases SET state=?1,active=?2,snapshot=?3,verdict_day=?4,next_check=NULL WHERE id=?5",
+                    params![state,active,snapshot.to_string(),date,id])?;
+            }
+            Ok(())
+        })?;
+        let at = now();
+        store.resume_no_hearing_cancelled_cases(at, &settings)?;
+        store.resume_no_hearing_cancelled_cases(at + 10.0, &settings)?;
+        let cases = store.page("", 1, 10, CaseScope::All, settings.timezone, false)?;
+        let rows = cases["cases"].as_array().unwrap();
+        let row = |i: usize| rows.iter().find(|r| r["id"] == ids[i]).unwrap();
+        for index in 0..3 {
+            assert_eq!(row(index)["state"], "monitoring");
+            assert_eq!(row(index)["judgment_stage"], "before_verdict");
+            assert_eq!(row(index)["verdict_day"], "");
+        }
+        assert_eq!(row(0)["next_check"], at);
+        assert!(row(1)["next_check"].is_null());
+        assert_eq!(row(2)["next_check"], at);
+        assert_eq!(row(3)["state"], "done");
+        assert_eq!(row(3)["judgment_stage"], "decided");
+        Ok(())
+    }
 
     #[test]
     fn case_scopes_follow_confirmed_orders_before_search_and_pagination() -> Result<()> {

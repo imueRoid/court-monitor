@@ -220,6 +220,7 @@ pub async fn run(directory: &Path, listen: Listen) -> Result<bool> {
     let installed = env::var("COURT_MONITOR_VERSION").unwrap_or_else(|_| "development".into());
     let settings = Arc::new(Settings::from_env()?);
     let store = Store::open(&settings.database)?;
+    store.resume_no_hearing_cancelled_cases(crate::store::now(), &settings)?;
     let auth = Arc::new(Auth::new(store.clone(), &settings)?);
     let google = Arc::new(Google::new(store.clone(), settings.clone())?);
     tokio::fs::metadata("server/static/index.html")
