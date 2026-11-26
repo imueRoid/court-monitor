@@ -2,9 +2,10 @@
 const state = {csrf:"", courts:[], cases:[], selected:null, checked:new Set(), deleting:false, config:null, calendarConfigured:null, scope:"ongoing", scopeLoading:true, scopeTotal:0, query:"", page:1, pageSize:10, pages:1, total:0, metrics:{}, request:0, detailRequests:new Map(), detailErrors:new Map()};
 const $ = id => document.getElementById(id);
 const detailCard = $("detail-card");
-const ongoingTab = $("dashboard-tab"), finishedTab = $("finished-tab"), settingsTab = $("settings-tab");
-const dashboardTabs = [ongoingTab, finishedTab, settingsTab];
-let activeTab = ongoingTab;
+const dashboardTab = $("dashboard-tab");
+const settingsTab = $("settings-tab");
+const finishedTab = $("finished-tab");
+let activeDashboardTab = dashboardTab;
 let searchTimer;
 
 function setCalendarConfigured(configured) {
@@ -14,53 +15,59 @@ function setCalendarConfigured(configured) {
 
 function placeGoogleCard() {
   if (state.calendarConfigured === null) return;
-  const onDashboard = activeTab === ongoingTab && !state.calendarConfigured;
+  const onDashboard = activeDashboardTab === dashboardTab && !state.calendarConfigured;
   const destination = $(onDashboard ? "google-setup" : "google-settings");
   const card = $("google-card");
   if (card.parentElement === destination) return;
   const restoreFocus = card.contains(document.activeElement);
   destination.append(card);
-  if (restoreFocus) activeTab.focus();
+  if (restoreFocus) activeDashboardTab.focus();
 }
 
-function selectDashboardTab(tab) {
-  activeTab = tab;
-  for (const item of dashboardTabs) {
-    const selected = item === tab;
-    item.setAttribute("aria-selected", String(selected));
-    item.tabIndex = selected ? 0 : -1;
-    $(item.getAttribute("aria-controls")).hidden = !selected;
+function bindTabs(tabs, onSelect) {
+  function select(tab) {
+    for (const item of tabs) {
+      const selected = item === tab;
+      item.setAttribute("aria-selected", String(selected));
+      item.tabIndex = selected ? 0 : -1;
+      $(item.getAttribute("aria-controls")).hidden = !selected;
+    }
+    onSelect(tab);
   }
-  placeGoogleCard();
-  if (tab === settingsTab) return;
-  const finished = tab === finishedTab;
-  const scope = finished ? "finished" : "ongoing";
+  for (const [index, tab] of tabs.entries()) {
+    tab.addEventListener("click", () => select(tab));
+    tab.addEventListener("keydown", event => {
+      const destination = {
+        ArrowLeft: tabs.at(index - 1),
+        ArrowRight: tabs[(index + 1) % tabs.length],
+        Home: tabs[0], End: tabs.at(-1),
+      }[event.key];
+      if (!destination) return;
+      event.preventDefault();
+      select(destination);
+      destination.focus();
+    });
+  }
+  return select;
+}
+
+function selectCaseTab(tab) {
+  const scope = tab === finishedTab ? "finished" : "ongoing";
   if (scope === state.scope) return;
   clearTimeout(searchTimer);
   state.checked.clear();
   Object.assign(state,{scope,scopeLoading:true,scopeTotal:0,query:"",cases:[],selected:null,page:1,pages:1,total:0});
   $("case-search").value = "";
-  $("case-list-title").textContent = finished ? "종료된 사건" : "진행 중인 사건";
-  $(finished ? "finished-panel" : "ongoing-cases").append($("case-list"));
+  $(tab.getAttribute("aria-controls")).append($("case-list"));
   renderCases();
   if(state.config)reload().catch(error=>notice(error.message,true));
 }
 
-for (const tab of dashboardTabs) {
-  tab.addEventListener("click", () => selectDashboardTab(tab));
-  tab.addEventListener("keydown", event => {
-    const index = dashboardTabs.indexOf(tab);
-    const destination = {
-      ArrowLeft: dashboardTabs.at(index - 1),
-      ArrowRight: dashboardTabs[(index + 1) % dashboardTabs.length],
-      Home: ongoingTab, End: settingsTab,
-    }[event.key];
-    if (!destination) return;
-    event.preventDefault();
-    selectDashboardTab(destination);
-    destination.focus();
-  });
-}
+const selectDashboardTab = bindTabs([dashboardTab, settingsTab], tab => {
+  activeDashboardTab = tab;
+  placeGoogleCard();
+});
+bindTabs([$("ongoing-tab"), finishedTab], selectCaseTab);
 const googleResult = new URLSearchParams(location.search).get("google");
 if (["error", "cancelled"].includes(googleResult)) selectDashboardTab(settingsTab);
 
