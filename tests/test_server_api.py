@@ -120,8 +120,21 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(last["page"], 2)
         self.assertEqual(last["cases"], second["cases"])
         self.assertEqual(len(self.client.get("/api/export").json()["cases"]), 25)
-        for params in ({"page": 0}, {"page_size": 0}, {"page_size": 101}, {"q": "a" * 201}):
+        for params in ({"page": 0}, {"page_size": 0}, {"page_size": 101}, {"q": "a" * 201}, {"scope": "invalid"}):
             self.assertEqual(self.client.get("/api/cases", params=params).status_code, 422)
+
+    def test_case_scope_keeps_completed_orders_in_the_finished_list(self):
+        self.login()
+        store = self.app.state.store
+        ongoing = store.add_case("가상법원", "2024가단1", "가상당사자")
+        finished = store.add_case("가상법원", "2024가단2", "가상당사자")
+        with store.db(True) as db:
+            snapshot = {"summary": {"판결 주문": "원고일부승"}}
+            db.execute("UPDATE cases SET snapshot=? WHERE id=?", (json.dumps(snapshot), finished))
+        for scope, expected in (("ongoing", ongoing), ("finished", finished)):
+            result = self.client.get("/api/cases", params={"scope": scope, "q": "가상당사자"}).json()
+            self.assertEqual([row["id"] for row in result["cases"]], [expected])
+            self.assertEqual((result["scope_total"], result["metrics"]["ongoing"]), (1, 1))
 
     def test_search_uses_related_values_and_treats_symbols_literally(self):
         self.login()

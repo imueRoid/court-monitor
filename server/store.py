@@ -135,7 +135,7 @@ class Store:
         with self.db() as db:
             return self._case_records(db)
 
-    def case_page(self, query="", page=1, page_size=10, *, now=None, timezone_name="Asia/Seoul"):
+    def case_page(self, query="", page=1, page_size=10, *, now=None, timezone_name="Asia/Seoul", scope="all"):
         now = datetime.now(timezone.utc) if now is None else now
 
         def upcoming_key(snapshot):
@@ -143,25 +143,36 @@ class Store:
             # An undetermined time precedes timed hearings on the same date.
             return f"{upcoming.day}T{upcoming.clock or '00:00'}" if upcoming else None
 
+        def case_finished(snapshot):
+            return has_order(json.loads(snapshot).get("summary", {}))
+
         terms = ["".join(term.casefold().split()) for term in query.split()]
-        where = "WHERE " + " AND ".join(
-            "instr(searchable_text(c.court,c.case_number,c.party,c.snapshot),?)>0" for _ in terms) if terms else ""
+        filters = ["instr(searchable_text(c.court,c.case_number,c.party,c.snapshot),?)>0"] * len(terms)
+        if scope != "all":
+            filters.append({"ongoing": "NOT case_finished(c.snapshot)", "finished": "case_finished(c.snapshot)"}[scope])
+        where = "WHERE " + " AND ".join(filters) if filters else ""
         with self.db() as db:
             db.execute("BEGIN")  # Counts and rows belong to the same database snapshot.
             db.create_function("searchable_text", 4, searchable_text, deterministic=True)
             db.create_function("upcoming_key", 1, upcoming_key, deterministic=True)
+            db.create_function("case_finished", 1, case_finished, deterministic=True)
             total = db.execute("SELECT COUNT(*) FROM cases c " + where, terms).fetchone()[0]
             pages = max(1, (total + page_size - 1) // page_size)
             page = min(max(1, page), pages)
             records = self._case_records(db, where, (*terms, page_size, (page - 1) * page_size), "LIMIT ? OFFSET ?",
                                          "upcoming_key(c.snapshot) ASC NULLS LAST,c.created DESC,c.id DESC")
             counts = db.execute("""SELECT COUNT(*) AS total,
-                COALESCE(SUM(active=1 AND state!='done'),0) AS monitoring,
-                COALESCE(SUM(active=1 AND state='awaiting_order'),0) AS waiting FROM cases""").fetchone()
+                COALESCE(SUM(finished),0) AS finished,
+                COALESCE(SUM(active=1 AND NOT finished),0) AS monitoring,
+                COALESCE(SUM(active=1 AND NOT finished AND state='awaiting_order'),0) AS waiting
+                FROM (SELECT active,state,case_finished(snapshot) AS finished FROM cases)""").fetchone()
             metrics = dict(counts)
+            finished = metrics.pop("finished")
+            metrics["ongoing"] = metrics["total"] - finished
+            scope_total = {"all": metrics["total"], "ongoing": metrics["ongoing"], "finished": finished}[scope]
             metrics["pending"] = db.execute("SELECT COUNT(*) FROM events WHERE payload_hash!=synced_hash").fetchone()[0]
         return {"cases": records, "total": total, "page": page, "page_size": page_size,
-                "pages": pages, "metrics": metrics}
+                "pages": pages, "scope_total": scope_total, "metrics": metrics}
 
     def request_refresh(self, key, now=None):
         with self.db(True) as db:

@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 import secrets
 import time
+from typing import Literal
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
@@ -246,9 +247,9 @@ def create_app(settings=None, *, start_worker=True, worker_factory=Worker):
 
     @api.get("/cases")
     def cases(q: str = Query("", max_length=200), page: int = Query(1, ge=1),
-              page_size: int = Query(10, ge=1, le=100)):
+              page_size: int = Query(10, ge=1, le=100), scope: Literal["all", "ongoing", "finished"] = "all"):
         now = datetime.now(timezone.utc)
-        result = store.case_page(q, page, page_size, now=now, timezone_name=settings.timezone)
+        result = store.case_page(q, page, page_size, now=now, timezone_name=settings.timezone, scope=scope)
         for record in result["cases"]:
             upcoming = next_hearing(record["observed"], now, settings.timezone)
             record["next_hearing"] = asdict(upcoming) if upcoming else None

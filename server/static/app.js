@@ -1,9 +1,11 @@
 "use strict";
-const state = {csrf:"", courts:[], cases:[], selected:null, checked:new Set(), deleting:false, config:null, calendarConfigured:null, query:"", page:1, pageSize:10, pages:1, total:0, metrics:{}, request:0, detailRequests:new Map(), detailErrors:new Map()};
+const state = {csrf:"", courts:[], cases:[], selected:null, checked:new Set(), deleting:false, config:null, calendarConfigured:null, scope:"ongoing", scopeLoading:true, scopeTotal:0, query:"", page:1, pageSize:10, pages:1, total:0, metrics:{}, request:0, detailRequests:new Map(), detailErrors:new Map()};
 const $ = id => document.getElementById(id);
 const detailCard = $("detail-card");
-const dashboardTabs = [$("dashboard-tab"), $("settings-tab")];
-let activeTab = dashboardTabs[0];
+const ongoingTab = $("dashboard-tab"), finishedTab = $("finished-tab"), settingsTab = $("settings-tab");
+const dashboardTabs = [ongoingTab, finishedTab, settingsTab];
+let activeTab = ongoingTab;
+let searchTimer;
 
 function setCalendarConfigured(configured) {
   state.calendarConfigured = configured;
@@ -12,7 +14,7 @@ function setCalendarConfigured(configured) {
 
 function placeGoogleCard() {
   if (state.calendarConfigured === null) return;
-  const onDashboard = activeTab === dashboardTabs[0] && !state.calendarConfigured;
+  const onDashboard = activeTab === ongoingTab && !state.calendarConfigured;
   const destination = $(onDashboard ? "google-setup" : "google-settings");
   const card = $("google-card");
   if (card.parentElement === destination) return;
@@ -30,15 +32,28 @@ function selectDashboardTab(tab) {
     $(item.getAttribute("aria-controls")).hidden = !selected;
   }
   placeGoogleCard();
+  if (tab === settingsTab) return;
+  const finished = tab === finishedTab;
+  const scope = finished ? "finished" : "ongoing";
+  if (scope === state.scope) return;
+  clearTimeout(searchTimer);
+  state.checked.clear();
+  Object.assign(state,{scope,scopeLoading:true,scopeTotal:0,query:"",cases:[],selected:null,page:1,pages:1,total:0});
+  $("case-search").value = "";
+  $("case-list-title").textContent = finished ? "종료된 사건" : "진행 중인 사건";
+  $(finished ? "finished-panel" : "ongoing-cases").append($("case-list"));
+  renderCases();
+  if(state.config)reload().catch(error=>notice(error.message,true));
 }
 
 for (const tab of dashboardTabs) {
   tab.addEventListener("click", () => selectDashboardTab(tab));
   tab.addEventListener("keydown", event => {
-    const otherTab = dashboardTabs.find(item => item !== tab);
+    const index = dashboardTabs.indexOf(tab);
     const destination = {
-      ArrowLeft: otherTab, ArrowRight: otherTab,
-      Home: dashboardTabs[0], End: dashboardTabs[1],
+      ArrowLeft: dashboardTabs.at(index - 1),
+      ArrowRight: dashboardTabs[(index + 1) % dashboardTabs.length],
+      Home: ongoingTab, End: settingsTab,
     }[event.key];
     if (!destination) return;
     event.preventDefault();
@@ -47,7 +62,7 @@ for (const tab of dashboardTabs) {
   });
 }
 const googleResult = new URLSearchParams(location.search).get("google");
-if (["error", "cancelled"].includes(googleResult)) selectDashboardTab(dashboardTabs[1]);
+if (["error", "cancelled"].includes(googleResult)) selectDashboardTab(settingsTab);
 
 const node = (tag,text,cls) => {const el=document.createElement(tag);if(text!==undefined)el.textContent=text;if(cls)el.className=cls;return el;};
 const fmt = stamp => stamp ? new Intl.DateTimeFormat("ko-KR",{timeZone:state.config?.timezone||"Asia/Seoul",dateStyle:"short",timeStyle:"short"}).format(new Date(stamp*1000)) : "—";
@@ -80,11 +95,14 @@ function renderCases(){
   detailCard.remove();
   table.replaceChildren();
   if(!state.cases.some(row=>row.id===state.selected))state.selected=null;
+  $("case-list").setAttribute("aria-busy",String(state.scopeLoading));
   $("empty").hidden=state.cases.length>0;
-  $("empty").textContent=state.query?"검색 결과가 없습니다. 다른 검색어를 입력해 주세요.":"첫 사건을 등록해 주세요.";
-  for(const key of ["total","monitoring","waiting","pending"])$(key).textContent=state.metrics[key]||0;
+  $("empty").textContent=state.scopeLoading?"사건을 불러오는 중입니다.":state.query?"검색 결과가 없습니다. 다른 검색어를 입력해 주세요.":
+    state.scope==="finished"?"종료된 사건이 없습니다.":"진행 중인 사건이 없습니다.";
+  $("total").textContent=state.metrics.ongoing||0;
+  for(const key of ["monitoring","waiting","pending"])$(key).textContent=state.metrics[key]||0;
   const start=state.total?(state.page-1)*state.pageSize+1:0;
-  $("case-count").textContent=`전체 ${state.metrics.total||0}건 · 검색 결과 ${state.total}건 · ${start}–${Math.min(state.page*state.pageSize,state.total)}건 표시`;
+  $("case-count").textContent=state.scopeLoading?"":`전체 ${state.scopeTotal}건 · 검색 결과 ${state.total}건 · ${start}–${Math.min(state.page*state.pageSize,state.total)}건 표시`;
   $("page-info").textContent=`${state.page} / ${state.pages} 페이지`;
   $("previous-page").disabled=state.page<=1;
   $("next-page").disabled=state.page>=state.pages;
@@ -211,10 +229,17 @@ async function refreshDetail(row){
 }
 async function reload(){
   const request=++state.request;
-  const params=new URLSearchParams({q:state.query,page:state.page,page_size:state.pageSize});
-  const [data,logData]=await Promise.all([api(`/cases?${params}`),api("/logs")]);
+  const params=new URLSearchParams({scope:state.scope,q:state.query,page:state.page,page_size:state.pageSize});
+  let data,logData;
+  try{[data,logData]=await Promise.all([api(`/cases?${params}`),api("/logs")]);}
+  catch(error){
+    if(request!==state.request)return;
+    state.scopeLoading=false;
+    renderCases();
+    throw error;
+  }
   if(request!==state.request)return;
-  Object.assign(state,{cases:data.cases,page:data.page,pages:data.pages,total:data.total,metrics:data.metrics});
+  Object.assign(state,{scopeLoading:false,scopeTotal:data.scope_total,cases:data.cases,page:data.page,pages:data.pages,total:data.total,metrics:data.metrics});
   renderCases();
   $("logs").replaceChildren();
   for(const log of logData.logs){const item=node("li");item.append(node("time",fmt(log.at)),node("span",log.message,log.level==="error"?"error":""));$("logs").append(item);}
@@ -227,7 +252,6 @@ async function reload(){
   if(!data.calendar_configured)notice("Google Calendar가 아직 연결되지 않았습니다. 계정을 연결하면 대기 중인 일정을 반영합니다.",true);
   else notice(`자동 확인 중 · 선고일 ${state.config.watch_hours[0]}–${state.config.watch_hours[1]}시, ${state.config.verdict_retry_minutes}분 간격 · 하루 최대 ${state.config.verdict_checks_per_day}회`);
 }
-let searchTimer;
 function searchCases(){clearTimeout(searchTimer);state.query=$("case-search").value.trim();state.page=1;state.selected=null;reload().catch(error=>notice(error.message,true));}
 $("search-form").addEventListener("submit",event=>{event.preventDefault();searchCases();});
 $("case-search").addEventListener("input",event=>{clearTimeout(searchTimer);if(!event.isComposing)searchTimer=setTimeout(searchCases,300);});
