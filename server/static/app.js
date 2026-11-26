@@ -41,6 +41,9 @@ function renderCases(){
     if(expanded)link.setAttribute("aria-controls","detail-card");
     link.addEventListener("click",()=>{state.selected=expanded?null:row.id;renderCases();if(!expanded&&row.show_progress)refreshDetail(row);});
     caseCell.append(link,node("div",row.court,"muted"));
+    caseCell.append(node("div",row.case_category||"사건 종류 미확인","muted"));
+    const party=node("td",row.party);
+    party.append(node("div",row.party_role||"역할 미확인","muted"));
     const status=node("td");
     status.append(node("span",row.active?(labels[row.state]||row.state):"일시중지",`badge ${row.state==="awaiting_order"?"wait":""} ${row.active?"":"pause"}`));
     if(row.last_error)status.append(node("div","조회 오류 · 상세 확인","error"));
@@ -54,7 +57,7 @@ function renderCases(){
     const group=node("div",undefined,"row-actions");
     group.append(button("지금 확인",()=>api(`/cases/${row.id}/refresh`,{})),button(row.active?"중지":"재개",()=>api(`/cases/${row.id}/active`,{active:!row.active})));
     actions.append(group);
-    tr.append(checkCell,caseCell,node("td",row.party),status,day,checked,sync,actions);
+    tr.append(checkCell,caseCell,party,status,day,checked,sync,actions);
     table.append(tr);
     if(expanded){
       const detailRow=node("tr",undefined,"case-detail-row");
@@ -94,7 +97,7 @@ $("delete-selected").addEventListener("click",async()=>{
   }catch(error){notice(error.message,true);}
   finally{state.deleting=false;renderSelection();for(const checkbox of document.querySelectorAll("#cases .case-checkbox"))checkbox.disabled=false;}
 });
-function renderDetail(row){renderProgress(row);detailCard.hidden=false;$("detail-title").textContent=`${row.court} ${row.case_number} · ${row.party}`;$("detail-time").textContent=`최근 확인 ${fmt(row.last_checked)}`;$("detail").replaceChildren();for(const key of ["판결 주문","선고일자","상소제기 여부","상소사건번호"]){$("detail").append(node("dt",key),node("dd",row.observed?.summary?.[key]||"확인되지 않음"));}$("detail-error").textContent=[row.last_error,row.calendar_error,...(row.observed?.warnings||[])].filter(Boolean).join("\n");}
+function renderDetail(row){renderProgress(row);detailCard.hidden=false;$("detail-title").textContent=`${row.court} ${row.case_number} · ${row.party}`;$("detail-time").textContent=`최근 확인 ${fmt(row.last_checked)}`;$("detail").replaceChildren(node("dt","사건 종류"),node("dd",row.case_category||"확인되지 않음"),node("dt","당사자 역할"),node("dd",row.party_role||"확인되지 않음"));for(const key of ["판결 주문","선고일자","상소제기 여부","상소사건번호"]){$("detail").append(node("dt",key),node("dd",row.observed?.summary?.[key]||"확인되지 않음"));}$("detail-error").textContent=[row.last_error,row.calendar_error,...(row.observed?.warnings||[])].filter(Boolean).join("\n");}
 function renderProgress(row){
   $("progress-panel").hidden=!row.show_progress;
   if(!row.show_progress)return;

@@ -36,7 +36,7 @@ def main():
         docker("volume", "create", volume)
         docker("run", "-d", "--name", name, "--read-only", "--tmpfs", "/tmp:size=256m,mode=1777",
                "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "-p", f"127.0.0.1:{port}:8080",
-               "-v", volume + ":/data", "court-monitor:test")
+               "-e", "COURT_AUTO_UPDATE=false", "-v", volume + ":/data", "court-monitor:test")
         wait_ready(port)
         base = f"http://127.0.0.1:{port}"
         health = requests.get(base + "/health", timeout=5).json()

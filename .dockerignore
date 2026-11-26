@@ -6,6 +6,12 @@
 !court_client.py
 !case_summary.py
 !captcha_ocr.py
+!nas/
+!nas/Cargo.toml
+!nas/Cargo.lock
+!nas/src/
+!nas/src/**
+nas/target/
 !server/
 !server/**
 **/__pycache__/
