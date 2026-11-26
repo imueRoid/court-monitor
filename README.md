@@ -4,8 +4,7 @@
 
 - [시놀로지용 Compose](compose.synology.yaml) — **수정 없이 실행**, 접속 포트 **7708**
 - [시놀로지 설치 안내](server/SYNOLOGY.md)
-- Google 독립 인증 상세 페이지: 설치 후 `http://NAS-IP:7708/guide/google` 또는 관리 화면의 **처음부터 따라 하는 상세 안내**
-- [안내 페이지 소스](server/static/google-guide.html) — 준비사항·설정 위임 요청문·단계별 설명·오류 해결
+- Google Calendar 단계별 안내는 설치 후 **설정 → Google Calendar 연결 → 처음부터 따라 하는 상세 안내** 또는 NAS의 `/guide/google`에서 엽니다. [시놀로지 안내의 Google 연결 절차](server/SYNOLOGY.md#google-독립-인증)
 - [일반 Docker 서버 안내](server/README.md), [Windows 프로그램](DESKTOP.md)
 - [Windows PC 설치 앱](WINDOWS-PC.md) — 서버 없이 실행, 설정 탭에서 자동 시작·백그라운드 동작 선택
 - [Docker Hub 이미지](https://hub.docker.com/r/imueroid/court-monitor)
@@ -14,7 +13,7 @@
 
 `compose.synology.yaml`을 Container Manager 프로젝트에 그대로 넣고 실행한 뒤 `http://NAS-IP:7708`에 접속합니다. 처음 열리는 화면에서 관리자 비밀번호를 정합니다. YAML에 암호나 Google 키를 입력할 필요가 없습니다. Intel/AMD x86_64 NAS용이며 ARM 이미지는 검증하지 않았습니다.
 
-Google Calendar는 **각 NAS가 독립 인증**합니다. 사용자별 최초 OAuth 앱 등록 후, 웹에서 클라이언트 JSON을 등록하고 **Google 계정 연결**을 누르면 본인 계정의 사건 전용 캘린더를 자동 생성합니다. 공통 인증 서버를 사용하지 않습니다. Google Cloud 설정을 맡길 때 필요한 콜백 URI와 전달용 요청문도 상세 페이지에서 복사할 수 있습니다.
+Google Calendar 연동을 사용할 설치자는 본인 Google Cloud 프로젝트에서 웹 OAuth 클라이언트를 만들고 NAS에 JSON을 등록합니다. **Google 계정 연결**을 눌러 승인하면 본인 계정에 사건 전용 캘린더가 만들어집니다. 앱 안내에서 HTTPS·localhost 설정, 콜백 복사, 콘솔 메뉴와 오류별 해결 방법을 확인할 수 있습니다. [Google Calendar API 콘솔](https://console.cloud.google.com/apis/library/calendar-json.googleapis.com) · [Google Auth Platform 도움말](https://support.google.com/cloud/answer/15544987)
 
 ## 기능
 
