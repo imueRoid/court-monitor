@@ -198,9 +198,10 @@ impl Store {
             let Some((snapshot,manual,lease,checked,last)) = row else { return Ok(None); };
             let observed = Observation::read(&snapshot)?;
             let at = now();
-            let (queued, reason) = if observed.order() { (false, "order") }
-                else if manual || lease > at { (true, "pending") }
-                else if checked.is_some_and(|checked| at-checked<60.0) && observed.progress.is_some() { (false,"fresh") }
+            let has_detail = if observed.order() { observed.summary.contains_key("확정 여부") }
+                else { observed.progress.is_some() };
+            let (queued, reason) = if manual || lease > at { (true, "pending") }
+                else if checked.is_some_and(|checked| at-checked<60.0) && has_detail { (false,"fresh") }
                 else if last != 0.0 && at-last < 60.0 { (false,"cooldown") }
                 else {
                     db.execute("UPDATE cases SET manual=1,next_check=?1,detail_refresh_at=?1 WHERE id=?2",params![at,id])?;
@@ -385,20 +386,21 @@ impl Store {
         })
     }
 
-    pub fn complete(&self, job: &CaseJob, o: &Observation, at: f64, s: &Settings) -> Result<()> {
+    pub fn complete(&self, job: &CaseJob, mut o: Observation, at: f64, s: &Settings) -> Result<()> {
         self.write(|db| {
-            let row = db.query_row("SELECT manual,verdict_day,verdict_count,verdict_count_day FROM cases WHERE id=?1 AND lease_token=?2",
-                params![job.id,job.lease], |r| Ok((r.get::<_,bool>(0)?,r.get::<_,String>(1)?,r.get::<_,u32>(2)?,r.get::<_,String>(3)?))).optional()?;
-            let Some((manual,day,count,count_day)) = row else { return Ok(()); };
+            let row = db.query_row("SELECT manual,verdict_day,verdict_count,verdict_count_day,snapshot FROM cases WHERE id=?1 AND lease_token=?2",
+                params![job.id,job.lease], |r| Ok((r.get::<_,bool>(0)?,r.get::<_,String>(1)?,r.get::<_,u32>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?))).optional()?;
+            let Some((manual,day,count,count_day,snapshot)) = row else { return Ok(()); };
+            o.retain_judgment(&Observation::read(&snapshot)?);
             let moment = local(at,s.timezone);
-            let plan = schedule(s,moment,o,&day,count,&count_day);
+            let plan = schedule(s,moment,&o,&day,count,&count_day);
             let due = if manual {Some(at)} else {plan.next};
             db.execute("UPDATE cases SET state=?1,snapshot=?2,last_checked=?3,next_check=?4,last_error='',failures=0,
                 verdict_day=?5,verdict_count=?6,verdict_count_day=?7,lease_until=0,lease_token='' WHERE id=?8",
-                params![plan.state,serde_json::to_string(o)?,at,due,plan.verdict_day,plan.count,plan.count_day,job.id])?;
+                params![plan.state,serde_json::to_string(&o)?,at,due,plan.verdict_day,plan.count,plan.count_day,job.id])?;
             let signatures: BTreeSet<_> = o.hearings.iter().map(Hearing::signature).collect();
             for hearing in o.calendar_hearings(moment) {
-                observe_event(db, job, hearing, o, &signatures, moment)?;
+                observe_event(db, job, hearing, &o, &signatures, moment)?;
             }
             let mut stmt = db.prepare("SELECT * FROM events WHERE case_id=?1")?;
             let events = stmt.query_map([&job.id], event_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
@@ -436,6 +438,7 @@ impl Store {
                 }
             }
             let message: String = message.chars().take(1000).collect();
+            let due = (manual || state != "done").then_some(due);
             db.execute("UPDATE cases SET last_error=?1,failures=?2,next_check=?3,verdict_count=?4,verdict_count_day=?5,
                 lease_until=0,lease_token='' WHERE id=?6", params![message,failures.saturating_add(1),due,count,count_day,job.id])?;
             log(db,&job.id,at,"error",&message)
@@ -598,5 +601,74 @@ fn append_text(value: &Value, text: &mut String) {
             text.push(' ');
             text.push_str(&other.to_string());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::UNKNOWN;
+
+    #[test]
+    fn completed_case_can_refresh_appeal_and_finality_on_demand() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let store = Store::open(&directory.path().join("cases.sqlite3"))?;
+        let settings = Settings::from_env()?;
+        let ids = store.import(&[CaseInput {
+            court: "가상법원".into(),
+            case_number: "2024가단10".into(),
+            party: "가상당사자".into(),
+        }])?;
+        let id = &ids[0];
+        let at = now();
+        let job = store.claim_case(at, &settings)?.expect("new case queued");
+        let decided = Observation {
+            summary: [
+                ("판결 주문".into(), "청구를 기각한다.".into()),
+                ("선고일자".into(), "2026.01.31".into()),
+            ]
+            .into(),
+            ..Default::default()
+        };
+        store.complete(&job, decided, at, &settings)?;
+        assert_eq!(store.detail_refresh(id)?.unwrap()["reason"], "requested");
+        assert_eq!(store.detail_refresh(id)?.unwrap()["reason"], "pending");
+
+        let at = now();
+        let job = store
+            .claim_case(at, &settings)?
+            .expect("completed case queued");
+        let refreshed = Observation {
+            summary: [
+                ("판결 주문".into(), UNKNOWN.into()),
+                ("상소제기 여부".into(), "제기됨".into()),
+                ("상소사건번호".into(), "2026나10".into()),
+                ("확정 여부".into(), "확정됨 (2026.02.27)".into()),
+            ]
+            .into(),
+            ..Default::default()
+        };
+        store.complete(&job, refreshed, at, &settings)?;
+        let page = store.page("", 1, 10, settings.timezone, false)?;
+        let row = &page["cases"][0];
+        let summary = &row["observed"]["summary"];
+        assert_eq!(row["judgment_stage"], "decided");
+        assert!(row["next_check"].is_null());
+        assert_eq!(summary["판결 주문"], "청구를 기각한다.");
+        assert_eq!(summary["선고일자"], "2026.01.31");
+        assert_eq!(summary["상소사건번호"], "2026나10");
+        assert_eq!(summary["확정 여부"], "확정됨 (2026.02.27)");
+        assert_eq!(store.detail_refresh(id)?.unwrap()["reason"], "fresh");
+
+        assert!(store.refresh(id)?);
+        let at = now();
+        let job = store
+            .claim_case(at, &settings)?
+            .expect("manual refresh queued");
+        store.fail_case(&job, "일시적인 조회 실패", at, &settings)?;
+        let page = store.page("", 1, 10, settings.timezone, false)?;
+        assert!(page["cases"][0]["next_check"].is_null());
+        assert_eq!(page["cases"][0]["last_error"], "일시적인 조회 실패");
+        Ok(())
     }
 }

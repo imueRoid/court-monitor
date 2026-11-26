@@ -771,7 +771,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        store.complete(&case, &observed, time, &settings)?;
+        store.complete(&case, observed, time, &settings)?;
         assert!(google.sync_one().await?);
         assert_eq!(calls.load(Ordering::SeqCst), 2);
         assert!(store.events(&case.id)?[0]["synced_at"].is_number());

@@ -104,7 +104,7 @@ function renderCases(){
     link.dataset.caseId=row.id;
     link.setAttribute("aria-expanded",String(expanded));
     if(expanded)link.setAttribute("aria-controls","detail-card");
-    link.addEventListener("click",()=>{state.selected=expanded?null:row.id;renderCases();if(!expanded&&row.show_progress)refreshDetail(row);});
+    link.addEventListener("click",()=>{state.selected=expanded?null:row.id;renderCases();if(!expanded)refreshDetail(row);});
     caseCell.append(link,node("div",row.court,"muted"));
     caseCell.append(node("div",row.case_category||"사건 종류 미확인","muted"));
     const status=node("td");
@@ -164,12 +164,15 @@ function renderDetail(row) {
   renderProgress(row);
   detailCard.hidden = false;
   $("detail-title").textContent = `${row.court} ${row.case_number} · ${row.party}`;
-  $("detail-time").textContent = `최근 확인 ${fmt(row.last_checked)}`;
+  const stage = judgmentStage(row);
+  const pending = stage === "decided" && row.refresh_pending ? " · 상소·확정 정보 조회 중" : "";
+  $("detail-time").textContent = `최근 확인 ${fmt(row.last_checked)}${pending}`;
   const detail = $("detail");
   detail.replaceChildren(node("dt", "사건 종류"), node("dd", row.case_category || "확인되지 않음"));
-  const stage = judgmentStage(row);
   if (stage === "checking_order" || stage === "decided") {
-    for (const key of ["판결 주문", "선고일자", "상소제기 여부", "상소사건번호"]) {
+    const fields = ["판결 주문", "선고일자"];
+    if (stage === "decided") fields.push("상소제기 여부", "상소사건번호", "확정 여부");
+    for (const key of fields) {
       detail.append(node("dt", key), node("dd", row.observed?.summary?.[key] || "확인되지 않음"));
     }
   } else {
@@ -178,7 +181,8 @@ function renderDetail(row) {
     const description = next ? [hearingText(next), next.location].filter(Boolean).join(" · ") : "확인된 차회 기일 없음";
     detail.append(node("dt", label), node("dd", description));
   }
-  $("detail-error").textContent = [row.last_error, row.calendar_error, ...(row.observed?.warnings || [])].filter(Boolean).join("\n");
+  const requestError = stage === "decided" ? state.detailErrors.get(row.id) : "";
+  $("detail-error").textContent = [requestError, row.last_error, row.calendar_error, ...(row.observed?.warnings || [])].filter(Boolean).join("\n");
 }
 function renderProgress(row){
   $("progress-panel").hidden=!row.show_progress;
@@ -203,7 +207,7 @@ async function refreshDetail(row){
   state.detailRequests.set(row.id,Date.now());
   state.detailErrors.delete(row.id);
   try{await api("/cases/"+row.id+"/detail-refresh",{});await reload();}
-  catch(error){state.detailRequests.delete(row.id);state.detailErrors.set(row.id,"최신 조회 요청 실패: "+error.message);if(state.selected===row.id)renderProgress(row);}
+  catch(error){state.detailRequests.delete(row.id);state.detailErrors.set(row.id,"최신 조회 요청 실패: "+error.message);if(state.selected===row.id)renderDetail(row);}
 }
 async function reload(){
   const request=++state.request;

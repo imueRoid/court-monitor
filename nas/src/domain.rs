@@ -9,6 +9,8 @@ use std::{
 };
 
 pub const UNKNOWN: &str = "확인되지 않음";
+pub const UNKNOWN_APPEAL: &str = "제기 내역 확인되지 않음";
+pub const NO_APPEAL: &str = "제기 내역 없음";
 
 #[derive(Clone, Default, Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[serde(default)]
@@ -150,6 +152,41 @@ impl Observation {
 
     pub fn text(&self, field: &str) -> &str {
         self.summary.get(field).map(String::as_str).unwrap_or("")
+    }
+
+    pub fn retain_judgment(&mut self, previous: &Self) {
+        if !previous.order() {
+            return;
+        }
+        let old_day = day(previous.text("선고일자"));
+        let new_day = day(self.text("선고일자"));
+        if !old_day.is_empty()
+            && ((!new_day.is_empty() && new_day != old_day)
+                || self.cancelled_verdict_days.contains(&old_day)
+                || !self.order()
+                    && self
+                        .hearings
+                        .iter()
+                        .any(|h| h.day > old_day && (trial(h) || h.kind == "선고")))
+        {
+            return;
+        }
+        if !self.order() {
+            self.summary
+                .insert("판결 주문".into(), previous.text("판결 주문").into());
+        }
+        let unknown = |text: &str| ["", UNKNOWN, UNKNOWN_APPEAL].contains(&text.trim());
+        let no_appeal = self.text("상소제기 여부") == NO_APPEAL;
+        for field in ["선고일자", "상소제기 여부", "상소사건번호", "확정 여부"]
+        {
+            if no_appeal && field == "상소사건번호" {
+                continue;
+            }
+            let prior = previous.text(field);
+            if unknown(self.text(field)) && !unknown(prior) {
+                self.summary.insert(field.into(), prior.into());
+            }
+        }
     }
 
     pub fn normalize(&mut self) {
