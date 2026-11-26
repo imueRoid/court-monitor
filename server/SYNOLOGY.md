@@ -8,8 +8,8 @@ Intel/AMD x86_64 CPU와 Container Manager를 사용하는 NAS 기준입니다. �
 2. File Station에서 프로젝트 폴더를 만듭니다. 예: `/volume1/docker/court-monitor`.
 3. Container Manager → 프로젝트 → 생성에서 그 폴더를 선택합니다. Compose 내용을 편집기에 넣거나 `docker-compose.yml`로 업로드하고 시작합니다.
 4. `http://NAS-IP:7708`로 접속합니다. 처음 설정 화면에서 관리자 비밀번호를 두 번 입력합니다. 이후에는 로그인 화면이 나옵니다.
-5. 관리 화면의 **Google Calendar 연결 → 처음부터 따라 하는 상세 안내**를 엽니다. 안내 주소는 `http://NAS-IP:7708/guide/google`입니다.
-6. 자신의 OAuth 앱을 처음 한 번 등록하고, 내려받은 웹 애플리케이션 JSON을 NAS 화면에서 등록합니다. **Google 계정 연결**에서 계정을 선택·승인하면 사건 전용 캘린더가 자동 생성됩니다.
+5. Calendar 연동을 사용하려면 관리 화면의 **설정 → Google Calendar 연결 → 처음부터 따라 하는 상세 안내**를 엽니다. 안내 주소는 `http://NAS-IP:7708/guide/google`입니다.
+6. 안내를 따라 본인의 OAuth 앱을 설정하고, 내려받은 웹 애플리케이션 JSON을 NAS에 등록합니다. **Google 계정 연결**에서 본인 계정을 선택·승인하면 사건 전용 캘린더가 만들어집니다.
 
 SSH로 실행한다면:
 
@@ -21,11 +21,11 @@ NAS가 구형 `docker-compose` 명령을 사용한다면 같은 인수로 실행
 
 ## Google 독립 인증
 
-각 사용자의 OAuth 클라이언트·Google 권한·캘린더·DB는 각자의 NAS에서 관리합니다. 공통 인증 서버가 없습니다. 앱은 자신의 OAuth 클라이언트가 만드는 보조 캘린더 범위인 `calendar.app.created` 권한을 요청합니다. 일반 개인 일정 전체를 수정하는 권한을 추가할 필요가 없습니다.
+각 설치자가 본인 Google Cloud 프로젝트와 승인 권한을 관리합니다. 설치 후 **설정 → Google Calendar 연결 → 처음부터 따라 하는 상세 안내**에서 실제로 접속 중인 주소의 콜백을 복사할 수 있습니다. 상세 안내에는 설정을 맡길 때 사용할 요청문과 오류별 해결 방법도 있습니다.
 
-일반 HTTP NAS IP 주소 대신 HTTPS 주소 또는 localhost SSH 터널로 최초 인증합니다. 상세 안내 페이지에 DSM 역방향 프록시, localhost 터널, Google 프로젝트/API/동의 화면/클라이언트 생성, 콜백 URI 복사, JSON 등록, 재인증과 오류 해결을 설명했습니다. 설정을 도우미에게 맡길 때 복사할 요청문도 있습니다.
-
-실제 Google 계정 승인까지 확인하려면 사용자 본인의 OAuth 설정이 필요합니다. External + Testing 상태의 Calendar 갱신 토큰은 7일 후 만료될 수 있으므로 장기 운영 시 게시·확인 절차를 마치세요.
+1. NAS를 HTTPS 도메인으로 열거나 PC에서 NAS로 localhost SSH 터널을 연 뒤 같은 브라우저로 접속합니다. 예를 들어 HTTPS를 쓰면 `https://court.example.com/oauth/google/callback`, 기본 localhost 터널을 쓰면 `http://localhost:7708/oauth/google/callback`을 Google에 등록합니다. [DSM 역방향 프록시](https://kb.synology.com/en-global/DSM/help/DSM/AdminCenter/system_login_portal_advanced?version=7) · [Google 리디렉션 URI 규칙](https://developers.google.com/identity/protocols/oauth2/web-server#uri-validation)
+2. 본인 계정 한 개를 연결하는 새 프로젝트는 Google의 개인 모드를 사용할 수 있습니다. 기존 외부 프로젝트는 **대상**에서 테스트 사용자와 게시 상태를 확인합니다. 외부 테스트 모드의 Calendar 승인은 7일 뒤 만료됩니다. 같은 프로젝트에서 Calendar API를 켜고 앱이 요청하는 `calendar.app.created` 권한을 확인합니다. [개인 모드 설정](https://console.cloud.google.com/auth/overview/personal) · [사용자 유형과 게시 상태](https://support.google.com/cloud/answer/15549945?hl=ko) · [Calendar API 사용 설정](https://console.cloud.google.com/apis/library/calendar-json.googleapis.com) · [Calendar 권한 범위](https://developers.google.com/workspace/calendar/api/auth)
+3. 웹 애플리케이션 클라이언트의 승인된 리디렉션 URI를 등록하고, 생성 창에서 시크릿이 포함된 JSON을 내려받아 비공개로 보관합니다. 같은 주소로 NAS에 로그인해 **OAuth JSON 선택하여 등록 → Google 계정 연결**을 진행하고 Google Calendar의 **사건 관리** 캘린더를 확인합니다. [OAuth 클라이언트 콘솔](https://console.cloud.google.com/auth/clients) · [클라이언트 JSON과 시크릿 관리](https://support.google.com/cloud/answer/15549257)
 
 ## DB·로그인·재시작
 

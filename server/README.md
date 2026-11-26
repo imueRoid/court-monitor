@@ -43,9 +43,9 @@ docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work python:3.12-
 
 ## 2. 사건 전용 Google Calendar 연결
 
-웹 관리 화면의 **Google Calendar 연결 → 처음부터 따라 하는 상세 안내**를 엽니다. 각 NAS가 자신의 OAuth 클라이언트를 등록하고 본인 Google 계정으로 인증합니다. 최초 앱 등록 후 JSON 업로드·계정 선택·권한 승인을 웹에서 진행합니다. 프로그램이 사용자 소유의 사건 전용 캘린더를 자동 생성합니다. 공통 인증 서버나 서비스 계정 공유가 필요하지 않습니다.
+웹 관리 화면의 **설정 → Google Calendar 연결 → 처음부터 따라 하는 상세 안내**를 엽니다. 각 설치자가 본인 Google Cloud 프로젝트에서 OAuth 클라이언트를 만들고 JSON을 NAS에 등록한 다음 본인 Google 계정으로 승인하면 사건 전용 캘린더가 만들어집니다.
 
-안내 페이지는 `/guide/google`에 있으며 콜백 URI·설정 위임 요청문 복사, HTTPS/localhost 주소 준비, Cloud 프로젝트·Calendar API·동의 화면·웹 클라이언트 생성, Testing 토큰 만료와 오류 해결을 포함합니다. 시놀로지 Compose는 어떤 값도 수정하지 않습니다.
+`/guide/google` 안내에서 HTTPS·localhost 접속, 콜백 복사, 개인 모드, Calendar API, 웹 OAuth JSON 생성 및 오류 해결을 순서대로 확인할 수 있습니다. [시놀로지 안내의 Google 연결 절차](SYNOLOGY.md#google-독립-인증) · [Google Auth Platform 도움말](https://support.google.com/cloud/answer/15544987)
 
 기존 서비스 계정 배포를 위한 환경변수·secret 파일 입력은 호환용으로 유지합니다. 신규 설치에는 웹의 독립 OAuth 방식을 권장합니다.
 
