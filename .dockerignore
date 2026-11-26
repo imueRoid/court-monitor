@@ -1,6 +1,7 @@
 *
 !Dockerfile
 !nas/
+nas/*
 !nas/Cargo.toml
 !nas/Cargo.lock
 !nas/ocr-assets.requirements
@@ -9,5 +10,10 @@
 !nas/src/**
 nas/target/
 !server/
+server/*
 !server/static/
 !server/static/**
+**/__pycache__/
+**/*.sqlite3
+**/*.sqlite3-*
+**/credentials.key

@@ -110,7 +110,7 @@ docker compose up -d --build
 ## 검증 상태와 남은 연결 작업
 
 - 서버 검사는 관리자 로그인·CSRF, 암호 해시·세션·로그아웃·암호 변경·로그인 제한, 등록·가져오기, 기일 추출, 선고 확인 횟수·시간대, 재시작 복원, 기일 변경, 주문 반영, Google 전송 오류 분리와 중복 방지 등을 포함합니다.
-- 실제 제공된 사건 한 건으로 서버 조회·주문 추출·DB 저장·캘린더 전송 대기열 생성을 확인했습니다. 실제 사건정보와 자격증명은 배포 ZIP에 포함하지 않습니다.
+- Rust 서버는 공개 법원 목록과 조회 화면 정의를 읽는지 확인합니다. 사건 응답과 OCR은 합성 데이터로 검증합니다. 배포 ZIP에는 실행 파일과 웹 정적 파일이 들어갑니다.
 - 로컬 웹 관리 화면의 인증·법원 검색·등록·결과 표시·중지·수동 확인을 브라우저에서 확인했습니다. 데스크톱·모바일 레이아웃을 점검했고 JavaScript 오류가 없었습니다.
 - Google Calendar 연결·전송은 모의 응답으로 통합 검사합니다. 실제 승인을 통한 동작 확인은 사용자 본인의 OAuth 클라이언트와 계정 연결 후 가능합니다.
 - Linux 이미지 빌드·실행·OCR 검사는 GitHub Actions에서 수행합니다. 실제 게시 상태와 결과는 [Actions 이력](https://github.com/imueRoid/court-monitor/actions)에서 확인할 수 있습니다. 개발 PC에서의 Python 검사와 Linux 의존성 사전 확인만으로 컨테이너 실행 성공을 판단하지 않습니다.
@@ -124,7 +124,7 @@ python -m pip install -r requirements-server.txt httpx
 python -m unittest discover -s tests -p 'test_server*.py' -v
 ```
 
-Docker 이미지는 검증한 버전 목록인 `requirements-server.lock.txt`로 설치합니다.
+Docker 이미지는 `nas/Cargo.lock`으로 Rust 의존성을 고정하고 `nas/ocr-assets.requirements`의 해시로 OCR 모델과 ONNX 라이브러리를 확인합니다.
 
 ## 공식 참고 자료
 
