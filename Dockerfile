@@ -22,6 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && mkdir -p /data && chown court:court /data
 WORKDIR /app
 COPY --from=nas-build /build/target/release/court-monitor-nas /usr/local/bin/court-monitor-nas
+RUN ln -s court-monitor-nas /usr/local/bin/python
 COPY --from=ocr-assets /opt/court-ocr /opt/court-ocr
 COPY server/static ./server/static
 ARG APP_VERSION=development

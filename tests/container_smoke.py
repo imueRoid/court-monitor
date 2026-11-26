@@ -3,12 +3,19 @@ import io
 import json
 import os
 import secrets
+import shlex
 import socket
 import subprocess
 import time
 
 import requests
 from PIL import Image, ImageDraw, ImageFont
+
+
+LEGACY_COMMAND = ["python", "-m", "uvicorn", "server.app:create_app", "--factory",
+                  "--host", "0.0.0.0", "--port", "7708", "--workers", "1", "--no-access-log"]
+LEGACY_HEALTH = ["python", "-c",
+                 "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7708/health',timeout=3)"]
 
 
 def docker(*args, input=None, check=True):
@@ -26,6 +33,17 @@ def wait_ready(port):
     raise AssertionError("Container did not become ready")
 
 
+def wait_healthy(name):
+    for _ in range(30):
+        status = docker("inspect", "--format", "{{.State.Health.Status}}", name).stdout.strip()
+        if status == "healthy":
+            return
+        if status == "unhealthy":
+            break
+        time.sleep(1)
+    raise AssertionError("The previous Synology health check failed")
+
+
 def main():
     name = "court-monitor-ci-" + secrets.token_hex(4)
     volume = name + "-data"
@@ -36,9 +54,13 @@ def main():
     try:
         docker("volume", "create", volume)
         docker("run", "-d", "--name", name, "--read-only", "--tmpfs", "/tmp:size=256m,mode=1777",
-               "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "-p", f"127.0.0.1:{port}:8080",
-               "-e", "COURT_AUTO_UPDATE=false", "-v", volume + ":/data", "court-monitor:test")
+               "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "-p", f"127.0.0.1:{port}:7708",
+               "--health-cmd", shlex.join(LEGACY_HEALTH), "--health-interval", "2s",
+               "-e", "COURT_AUTO_UPDATE=false", "-v", volume + ":/data", "court-monitor:test", *LEGACY_COMMAND)
         wait_ready(port)
+        wait_healthy(name)
+        docker("exec", name, *LEGACY_HEALTH)
+        docker("exec", name, "court-monitor-nas", "--healthcheck", "7708")
         base = f"http://127.0.0.1:{port}"
         health = requests.get(base + "/health", timeout=5).json()
         expected = os.environ["EXPECTED_VERSION"]
@@ -58,6 +80,7 @@ def main():
         assert session.get(base + "/api/bootstrap", timeout=5).json()["session_days"] == 90
         docker("restart", name)
         wait_ready(port)
+        wait_healthy(name)
         assert session.get(base + "/api/cases", timeout=5).ok, "Session did not survive restart"
         # A generated image checks the model without querying a real case.
         image = Image.new("RGB", (200, 64), "white")
@@ -68,7 +91,8 @@ def main():
             "cat >/tmp/ocr-test.png && court-monitor-nas --ocr-smoke /tmp/ocr-test.png"],
             input=stream.getvalue(), capture_output=True, check=True)
         assert ocr.stdout.decode().strip() == "123456", ocr
-        docker("exec", name, "/bin/sh", "-c", "! command -v python && ! command -v python3")
+        assert docker("exec", name, "python", "-c", "print(1)", check=False).returncode != 0
+        docker("exec", name, "/bin/sh", "-c", "! command -v python3")
         print("Container authentication, persistent SQLite session and OCR checks passed")
     except Exception:
         logs = docker("logs", "--tail", "100", name, check=False)
