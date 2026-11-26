@@ -1,84 +1,69 @@
-# 사건 일정 관리 — Docker 서버
+# 사건 일정 관리 · Linux Docker 서버
 
-시놀로지에서 소스 빌드 없이 **7708 포트**로 실행하려면 [시놀로지 설치 안내](SYNOLOGY.md)와 저장소 루트의 `compose.synology.yaml`을 사용하세요. 아래는 소스에서 직접 빌드하는 설정입니다.
+Linux x86_64 서버에서 저장소의 [`compose.yaml`](../compose.yaml)로 Rust 웹 서버를 직접 빌드하는 방법입니다. Synology의 공개 이미지 설치와 웹 앱 업데이트는 [시놀로지 설치 안내](SYNOLOGY.md)에서 확인할 수 있습니다.
 
-NAS 컨테이너는 Rust로 웹 API, 법원 조회, ONNX 인식, 사건 예약, SQLite 및 Google Calendar 동기화를 실행합니다. 웹에서 사건을 등록하면 서버가 차회 기일을 확인해 **사건 관리 전용 Google Calendar**에 반영합니다. 선고일에는 주문이 올라오는지 다시 확인하고, 주문이 확인되면 기존 선고 일정의 설명을 갱신합니다.
+## 1. 환경 파일 만들기
 
-Synology 전용 기능은 사용하지 않습니다. Linux x86_64 Docker 호스트에서 같은 패키지로 운영하도록 작성했습니다. Synology Container Manager도 같은 CPU·Docker 조건을 충족하면 배포 대상이 될 수 있습니다. ARM64 이미지 실행은 검증하지 않았습니다.
-
-## 동작
-
-| 상황 | 자동 처리 |
-|---|---|
-| 사건 등록 | 새 보안문자를 받아 로컬 OCR로 처리한 뒤 사건정보 조회 |
-| 차회 기일 발견 | 법원·사건번호·기일 종류·시각·장소를 캘린더에 등록 |
-| 기일 변경 | 새 응답에서 대체된 미래 기일의 기존 Google 일정 ID를 유지해 이동 |
-| 일반적인 진행 중 사건 | 기본 24시간마다 확인하고, 기일 30분 후 다시 확인 |
-| 일반 기일 당일 | 차회 기일 반영을 확인하기 위해 추가 조회 |
-| 선고일 | 선고 시각 30분 후부터 09–19시 내에서 30분 간격, 하루 최대 8회 확인 |
-| 주문 확인 전 | 다음 날에도 제한된 횟수로 계속 확인 |
-| 주문 확인 | 해당 선고 일정 설명에 주문·상소정보 추가, 사건 자동 조회 종료 |
-| 캘린더 장애 | 사건 결과를 보존하고 캘린더 전송만 별도로 재시도 |
-| 서버 재시작 | SQLite에 저장된 사건·예약·미전송 일정을 이어서 처리 |
-
-인식·인증 오류는 사건검색 클라이언트에서 새 보안문자로 최대 3회 시도합니다. 조회 자체가 실패하면 대기시간을 늘려 다시 시도합니다. 선고 확인의 실패도 일일 확인 횟수에 포함합니다. 수동 **지금 확인** 요청은 자동 확인 시간·횟수와 별도로 실행할 수 있습니다.
-
-기일 시각이 없으면 캘린더에는 종일 일정으로 표시합니다. 조회 시각과 다음 확인 시각은 한국시간으로 표시합니다. 이미 지난 기일과 기존 캘린더 일정을 임의로 삭제하지 않습니다. 기존 주문이 비어 있는 민사사건은 원고승·원고패 등 종국결과를 사용합니다.
-
-## 1. 환경 준비
-
-필요한 것은 Docker Engine과 Docker Compose 플러그인입니다. 배포 패키지를 서버의 한 폴더에 압축 해제한 뒤 그 폴더에서 실행합니다.
+Docker Engine과 Docker Compose 플러그인을 준비합니다. 저장소의 루트에서 다음 명령을 실행합니다.
 
 ```sh
 python3 server/prepare.py
 ```
 
-호스트에 Python이 없다면 Docker로 준비할 수 있습니다.
+Python이 설치된 Docker 컨테이너로도 준비할 수 있습니다.
 
 ```sh
 docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work python:3.12-slim python server/prepare.py
 ```
 
-이 명령은 `.env`와 `secrets/`를 만들며 기존 파일을 덮어쓰지 않습니다. 최초 관리자 암호는 `secrets/admin-password.txt`에 있습니다. 암호는 이미지에 포함하거나 로그에 출력하지 않습니다. 첫 기동 때 DB에 암호 해시를 저장하고 이후 암호 변경은 웹에서 합니다.
+이 명령은 `.env`와 `secrets/`를 만들고 최초 관리자 비밀번호를 `secrets/admin-password.txt`에 저장합니다. 이미 생성된 파일이 있으면 그 내용을 사용합니다. 이후 비밀번호는 웹 화면에서 바꿀 수 있습니다.
 
-## 2. 사건 전용 Google Calendar 연결
-
-웹 관리 화면의 **설정 → Google Calendar 연결 → 처음부터 따라 하는 상세 안내**를 엽니다. 각 설치자가 본인 Google Cloud 프로젝트에서 OAuth 클라이언트를 만들고 JSON을 NAS에 등록한 다음 본인 Google 계정으로 승인하면 사건 전용 캘린더가 만들어집니다.
-
-`/guide/google` 안내에서 HTTPS·localhost 접속, 콜백 복사, 개인 모드, Calendar API, 웹 OAuth JSON 생성 및 오류 해결을 순서대로 확인할 수 있습니다. [시놀로지 안내의 Google 연결 절차](SYNOLOGY.md#google-독립-인증) · [Google Auth Platform 도움말](https://support.google.com/cloud/answer/15544987)
-
-기존 서비스 계정 배포를 위한 환경변수·secret 파일 입력은 호환용으로 유지합니다. 신규 설치에는 웹의 독립 OAuth 방식을 권장합니다.
-
-## 3. 실행
+## 2. 빌드하고 접속하기
 
 ```sh
 docker compose up -d --build
 docker compose logs -f court
 ```
 
-기본 관리 주소는 `http://127.0.0.1:8080`입니다. 원격 서버라면 SSH 터널로 접속할 수 있습니다.
+기본 주소는 `http://127.0.0.1:8080`입니다. 원격 서버는 아래처럼 SSH 터널을 연 뒤 같은 PC의 브라우저에서 기본 주소를 엽니다.
 
 ```sh
-ssh -L 8080:127.0.0.1:8080 user@your-server
+ssh -N -L 8080:127.0.0.1:8080 user@your-server
 ```
 
-브라우저에서 위 로컬 주소에 접속하고 로그인 화면에 관리자 비밀번호를 입력합니다. **사건 등록**, **지금 확인**, **중지/재개**, **기존 이력 가져오기**를 사용할 수 있습니다. 기존 데스크톱 이력 JSON과 내보낸 사건 JSON을 가져오면 서버에서 새로 조회합니다.
+관리자 비밀번호로 로그인해 사건을 등록합니다. **기존 이력 가져오기**에서 Windows 조회 이력 JSON 또는 웹에서 내보낸 사건 목록을 가져오면 서버가 사건을 다시 조회합니다. 사건 관리와 종료된 사건 탭은 NAS 앱과 같은 방식으로 동작합니다. [사건 조회와 화면](SYNOLOGY.md#사건-조회와-화면)
 
-로그인은 기본 90일 동안 유지되며 세션은 SQLite에 보관해 재시작 후에도 유효합니다. 비밀번호 원문과 세션 토큰 원문은 DB에 저장하지 않습니다. 화면에서 로그아웃할 수 있고, 비밀번호를 변경하면 모든 기기의 세션이 해제됩니다. Compose 초기 암호가 웹에서 바꾼 DB 암호를 덮어쓰지 않습니다. SQLite는 웹 서버와 같은 컨테이너에서 동작하므로 별도 DB 컨테이너가 필요하지 않습니다.
+### HTTPS로 접속하기
 
-### 도메인과 HTTPS로 운영
-
-실제 도메인의 DNS를 서버로 지정하고 `.env`의 `DOMAIN`을 설정합니다. 서버의 80·443 포트가 해당 서버로 연결되는 환경에서 다음 명령을 사용합니다.
+포트 80·443으로 연결되는 도메인을 확보하고 `.env`에 `DOMAIN`을 설정합니다. 기본 `BIND_ADDRESS=127.0.0.1`을 사용하면 내부 관리 포트는 서버의 루프백에 바인딩됩니다.
 
 ```sh
 docker compose --profile https up -d --build
 ```
 
-함께 제공한 Caddy가 인증서와 역방향 프록시를 처리합니다. 이때 접속 주소는 `https://설정한도메인`입니다. `.env`의 기본 `BIND_ADDRESS=127.0.0.1`은 그대로 둘 수 있습니다.
+[`server/Caddyfile`](Caddyfile)의 설정에 따라 Caddy가 인증서와 역방향 프록시를 처리합니다. 브라우저에서 `https://설정한도메인`을 엽니다.
 
-## 조회 주기 설정
+## 3. Google Calendar 연결
 
-`.env`를 수정하고 `docker compose up -d`로 반영합니다.
+웹의 **설정 → Google Calendar 연결 → 처음부터 따라 하는 상세 안내**를 엽니다. 각 설치자가 본인 Google Cloud 프로젝트에서 웹 OAuth 클라이언트를 만들고 JSON을 등록한 다음 Google에서 승인하면, 본인 계정에 사건 전용 캘린더가 만들어집니다. [Google 연결 절차](SYNOLOGY.md#google-독립-인증) · [Google Auth Platform 도움말](https://support.google.com/cloud/answer/15544987)
+
+앱의 `/guide/google`에서 현재 주소의 콜백을 복사합니다. 예를 들어 기본 SSH 터널에서 앱을 열면 콜백은 `http://127.0.0.1:8080/oauth/google/callback`입니다. 성공적으로 연결한 뒤 사건에 기일이 확인되면 Google Calendar의 **사건 관리** 캘린더에 반영됩니다.
+
+### 기존 서비스 계정 호환 설정
+
+서비스 계정으로 운영하던 설치는 `secrets/google-service-account.json`과 `.env`의 `GOOGLE_CALENDAR_ID`를 계속 사용할 수 있습니다. 해당 캘린더는 서비스 계정에 일정 수정 권한으로 공유합니다. 서비스 계정 JSON과 웹 화면에 올리는 OAuth 클라이언트 JSON은 각각 지정된 설정 경로에서 사용합니다. [Google 서비스 계정 인증 안내](https://developers.google.com/identity/protocols/oauth2/service-account) · [Docker Compose secrets](https://docs.docker.com/compose/how-tos/use-secrets/)
+
+## 자동 조회와 일정 반영
+
+| 상황 | 기본 동작 |
+| --- | --- |
+| 사건 등록 또는 일반 확인 | 작업자가 사건을 순서대로 조회합니다. 진행 중인 사건은 기본 24시간마다 확인합니다. |
+| 기일 확인과 변경 | 확인된 기일을 전송 대기열에 넣습니다. 시간이 없으면 종일 일정으로 반영합니다. 대체된 미래 일정은 기존 Google 이벤트 ID를 이용해 시간을 수정합니다. |
+| 선고일 | 선고 시각 30분 후부터 한국시간 09~19시에 30분 간격으로 하루 최대 8회 주문을 확인합니다. |
+| 주문 또는 종국결과 확인 | 종료된 사건 탭에서 볼 수 있습니다. 선고 일정이 있으면 주문 등 확인한 정보를 반영합니다. |
+| 캘린더 전송 실패 | 사건 조회 결과를 저장하고 캘린더 전송을 별도로 재시도합니다. |
+
+기본값을 조정하려면 `.env`에 필요한 값을 저장하고 `docker compose up -d`로 반영합니다.
 
 ```dotenv
 BASE_POLL_HOURS=24
@@ -90,47 +75,16 @@ WATCH_END_HOUR=19
 REQUEST_GAP_SECONDS=5
 ```
 
-여러 사건은 하나의 작업자가 순서대로 조회하며, 사건별 새 조회 시작 사이에는 최소 간격을 둡니다. 법원 응답이나 다른 사건의 조회가 늦으면 예정 시각보다 뒤에 실행될 수 있습니다. 웹 서버는 **workers=1**로 실행하며, 여러 컨테이너가 같은 SQLite 볼륨을 동시에 공유하는 구성은 지원 대상으로 삼지 않습니다.
+수동 **지금 확인** 요청은 자동 주문 확인의 시간대와 횟수 외에도 사용할 수 있습니다. 법원 응답이 늦거나 앞선 조회가 진행 중이면 예정 시각보다 늦어질 수 있습니다. 하나의 `court` 서비스가 하나의 SQLite 볼륨을 사용합니다.
 
-작업 중 비정상 종료되면 조회 잠금은 최대 10분, 캘린더 잠금은 최대 3분 후 복구됩니다. Google 전송은 지속되는 이벤트 ID와 전송 대기열을 사용해 재시작 후 중복 생성 가능성을 줄입니다. 변경되지 않은 일정은 재전송하지 않습니다.
+## 로컬 빌드 갱신과 백업
 
-## 데이터와 업데이트
-
-사건, 기일, 요약, 작업 예약, 캘린더 전송 상태, 관리자 비밀번호 해시, 로그인 세션은 `court_data` named volume에 저장됩니다. 전체 법원 원문 JSON이나 보안문자 토큰은 DB에 저장하지 않습니다. 최근 작업 로그는 최대 5,000건 보관합니다. 소스 빌드 설정에서는 기존 Google 서비스 계정 자격증명을 별도 read-only secret으로 마운트할 수 있으며, 신규 OAuth 클라이언트와 토큰은 웹에서 입력받아 NAS DB에 암호화해 저장합니다.
+최신 소스를 가져온 뒤 같은 프로젝트에서 다음 명령을 실행합니다. HTTPS 프로필로 실행했다면 갱신할 때도 `--profile https`를 사용합니다.
 
 ```sh
-docker compose down
 docker compose up -d --build
 ```
 
-위 명령은 named volume을 삭제하지 않습니다. `docker compose down -v`는 사건 DB와 인증서 볼륨을 삭제하므로 이력 보존을 위한 업데이트에는 사용하지 않습니다. 백업은 서비스를 중지한 상태에서 `court_data` 볼륨 전체를 보관하거나, SQLite backup API를 이용해 수행합니다.
+사건, 예약, Google 연결, 캘린더 전송 대기열과 로그인 정보는 `court_data`에 있습니다. 컨테이너는 같은 볼륨에서 이어서 처리합니다. 백업은 서비스를 중지한 상태에서 볼륨 전체를 보관하고, 복원할 때 SQLite와 `credentials.key`를 함께 복원합니다. `docker compose down -v`는 볼륨까지 지우는 명령이므로 데이터가 필요한 설치의 갱신 시에는 피합니다.
 
-전용 캘린더 ID를 바꾸면 새 캘린더에 일정을 다시 동기화합니다. 이전 캘린더의 일정은 자동 삭제하지 않습니다.
-
-## 검증 상태와 남은 연결 작업
-
-- 서버 검사는 관리자 로그인·CSRF, 암호 해시·세션·로그아웃·암호 변경·로그인 제한, 등록·가져오기, 기일 추출, 선고 확인 횟수·시간대, 재시작 복원, 기일 변경, 주문 반영, Google 전송 오류 분리와 중복 방지 등을 포함합니다.
-- Rust 서버는 공개 법원 목록과 조회 화면 정의를 읽는지 확인합니다. 사건 응답과 OCR은 합성 데이터로 검증합니다. 배포 ZIP에는 실행 파일과 웹 정적 파일이 들어갑니다.
-- 로컬 웹 관리 화면의 인증·법원 검색·등록·결과 표시·중지·수동 확인을 브라우저에서 확인했습니다. 데스크톱·모바일 레이아웃을 점검했고 JavaScript 오류가 없었습니다.
-- Google Calendar 연결·전송은 모의 응답으로 통합 검사합니다. 실제 승인을 통한 동작 확인은 사용자 본인의 OAuth 클라이언트와 계정 연결 후 가능합니다.
-- Linux 이미지 빌드·실행·OCR 검사는 GitHub Actions에서 수행합니다. 실제 게시 상태와 결과는 [Actions 이력](https://github.com/imueRoid/court-monitor/actions)에서 확인할 수 있습니다. 개발 PC에서의 Python 검사와 Linux 의존성 사전 확인만으로 컨테이너 실행 성공을 판단하지 않습니다.
-- 법원 데이터가 제공되지 않거나 사이트 구조가 바뀌면 자동 처리에는 수정이 필요할 수 있습니다. 자동화 상태와 마지막 조회·캘린더 전송 오류는 관리 화면에서 확인합니다.
-
-개발 환경 검사:
-
-```sh
-cargo test --locked --manifest-path nas/Cargo.toml
-python -m pip install -r requirements-server.txt httpx
-python -m unittest discover -s tests -p 'test_server*.py' -v
-```
-
-Docker 이미지는 `nas/Cargo.lock`으로 Rust 의존성을 고정하고 `nas/ocr-assets.requirements`의 해시로 OCR 모델과 ONNX 라이브러리를 확인합니다.
-
-## 공식 참고 자료
-
-- [Google Calendar 일정 생성과 이벤트 ID](https://developers.google.com/workspace/calendar/api/guides/create-events)
-- [이벤트 필드와 날짜·시간 형식](https://developers.google.com/workspace/calendar/api/v3/reference/events)
-- [Calendar API 권한 범위](https://developers.google.com/workspace/calendar/api/auth)
-- [서비스 계정 인증](https://developers.google.com/identity/protocols/oauth2/service-account)
-- [Docker Compose secrets](https://docs.docker.com/compose/how-tos/use-secrets/)
-- [OWASP 비밀번호 저장 지침](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html)
+[개발 환경과 검증](../docs/DEVELOPMENT.md) · [GitHub Actions](https://github.com/imueRoid/court-monitor/actions)

@@ -4,7 +4,7 @@ Intel/AMD x86_64 CPU와 Container Manager를 사용하는 NAS 기준입니다. �
 
 ## 설치 순서
 
-1. [compose.synology.yaml](../compose.synology.yaml)을 그대로 내려받습니다. 값을 수정하지 않습니다.
+1. [시놀로지용 Compose 파일](https://raw.githubusercontent.com/imueRoid/court-monitor/main/compose.synology.yaml)을 `compose.synology.yaml`로 내려받습니다. 기본값으로 설치할 수 있습니다.
 2. File Station에서 프로젝트 폴더를 만듭니다. 예: `/volume1/docker/court-monitor`.
 3. Container Manager → 프로젝트 → 생성에서 그 폴더를 선택합니다. Compose 내용을 편집기에 넣거나 `docker-compose.yml`로 업로드하고 시작합니다.
 4. `http://NAS-IP:7708`로 접속합니다. 처음 설정 화면에서 관리자 비밀번호를 두 번 입력합니다. 이후에는 로그인 화면이 나옵니다.
@@ -27,6 +27,12 @@ NAS가 구형 `docker-compose` 명령을 사용한다면 같은 인수로 실행
 2. 본인 계정 한 개를 연결하는 새 프로젝트는 Google의 개인 모드를 사용할 수 있습니다. 기존 외부 프로젝트는 **대상**에서 테스트 사용자와 게시 상태를 확인합니다. 외부 테스트 모드의 Calendar 승인은 7일 뒤 만료됩니다. 같은 프로젝트에서 Calendar API를 켜고 앱이 요청하는 `calendar.app.created` 권한을 확인합니다. [개인 모드 설정](https://console.cloud.google.com/auth/overview/personal) · [사용자 유형과 게시 상태](https://support.google.com/cloud/answer/15549945?hl=ko) · [Calendar API 사용 설정](https://console.cloud.google.com/apis/library/calendar-json.googleapis.com) · [Calendar 권한 범위](https://developers.google.com/workspace/calendar/api/auth)
 3. 웹 애플리케이션 클라이언트의 승인된 리디렉션 URI를 등록하고, 생성 창에서 시크릿이 포함된 JSON을 내려받아 비공개로 보관합니다. 같은 주소로 NAS에 로그인해 **OAuth JSON 선택하여 등록 → Google 계정 연결**을 진행하고 Google Calendar의 **사건 관리** 캘린더를 확인합니다. [OAuth 클라이언트 콘솔](https://console.cloud.google.com/auth/clients) · [클라이언트 JSON과 시크릿 관리](https://support.google.com/cloud/answer/15549257)
 
+## 사건 조회와 화면
+
+- **사건 관리** 탭에서 차회 기일 순으로 사건을 확인합니다. 사건 상세에는 선고 전까지 차회 기일과 기일 사이 진행 내역이 표시됩니다. 변론 중에는 **변론 진행중**, 차회 기일이 선고면 **변론 종결됨**, 선고일에는 **주문 확인중**으로 표시합니다.
+- 판결 주문이나 종국결과가 확인되면 **종료된 사건** 탭에서 검색할 수 있습니다. 민사·행정 사건의 **원고일부승** 같은 종국결과도 해당합니다. 상세를 다시 열거나 **지금 확인**을 눌러 법원이 제공한 상소·확정 정보를 갱신합니다.
+- 일반 사건은 기본 하루 한 번 조회합니다. 선고일은 한국시간 09~19시에 30분 간격으로 하루 최대 8회 확인합니다. 확인 시각과 대기 상태는 웹 화면에서 볼 수 있습니다.
+
 ## DB·로그인·재시작
 
 - `court_data` named volume에 SQLite DB와 Google 인증 암호화 키를 저장합니다. 별도 DB 도커는 설치하지 않습니다.
@@ -38,15 +44,13 @@ NAS가 구형 `docker-compose` 명령을 사용한다면 같은 인수로 실행
 
 ## 업데이트와 백업
 
-Rust NAS 이미지로 처음 한 번 업데이트하세요. 새 이미지를 받은 뒤 **기존 Compose 설정으로 컨테이너를 재생성**합니다. 기존 시작 명령과 상태 검사도 새 이미지에서 동작합니다. 같은 프로젝트 이름과 `/data` 볼륨을 사용하면 사건 데이터, 로그인 세션, Google 연결을 이어서 사용할 수 있습니다.
+기존 Python 컨테이너에서 처음 옮기는 경우 Rust NAS 이미지를 받은 뒤 **같은 Compose 프로젝트에서 컨테이너를 재생성**합니다. 기존 시작 명령·상태 검사와 `/data` 볼륨을 사용하면 사건 데이터, 로그인 세션, Google 연결을 이어서 사용할 수 있습니다.
 
 ### 평소 앱 업데이트
 
 - NAS 재부팅이나 컨테이너 시작 시 [GitHub Releases](https://github.com/imueRoid/court-monitor/releases)에서 새 버전을 확인해, 현재 이미지에 호환되는 앱 패키지를 내려받습니다. 다운로드 실패 시 설치된 버전으로 시작하고, 새 앱이 시작되지 않으면 이전 버전으로 돌아갑니다.
 - 웹 관리 화면의 **업데이트 적용**을 누르면 검증한 패키지를 설치하고 같은 컨테이너 안에서 앱을 다시 시작합니다. 기존 SQLite 데이터와 로그인 세션을 이어서 사용합니다. 설치된 버전은 화면 하단이나 `/health`에서 확인할 수 있습니다.
 - 재부팅 시 자동 적용을 끄려면 서비스 환경에 `COURT_AUTO_UPDATE: "false"`를 추가합니다. 웹 화면에서 수동으로 적용할 수 있습니다.
-- 사건 상세에는 선고 전까지 차회 기일을 표시합니다. 변론 중에는 **변론 진행중**, 차회 기일이 선고면 **변론 종결됨**, 선고일에는 **주문 확인중**으로 표시합니다. 민사·행정 사건은 법원에 기록된 종국결과도 판결 내용에 표시합니다. 주문이 확인되면 사건 상세를 다시 열거나 **지금 확인**을 눌러 상소·확정 정보를 갱신할 수 있습니다.
-- 첫 화면의 **사건 관리**에는 진행 중인 사건이 표시됩니다. 판결 주문이나 종국결과가 확인되면 **종료된 사건** 탭으로 이동하며, 각 탭의 목록에서 해당 사건을 검색할 수 있습니다.
 
 ### Docker 실행 환경이 바뀌었을 때
 
@@ -68,7 +72,7 @@ Container Manager에서 프로젝트 이름을 별도로 지정했다면 두 명
 
 `1.0.<빌드번호>`처럼 특정 버전에 고정하면 이후 버전을 자동으로 따라가지 않습니다. 보통은 `latest`를 유지하고, 재현·이전 버전 복귀가 필요한 경우에만 숫자 버전 태그를 선택하세요.
 
-이전 배포에는 숫자 버전과 실행 중인 버전 표시가 없었고 OCI 인덱스에 실행 이미지와 `unknown/unknown` 빌드 증명 항목이 함께 들어 있었습니다. 새 배포는 단일 `linux/amd64` Docker V2 매니페스트로 게시해 형식 호환성을 단순화합니다. 게시 후 CI에서 태그들이 같은 다이제스트인지와 버전 라벨·이미지 형식을 실제 레지스트리 응답으로 검사합니다. Container Manager의 알림이 없다는 이유만으로 새 이미지가 없다고 판단하지 마세요.
+공개 이미지는 `linux/amd64` Docker V2 형식으로 게시됩니다. [이미지 태그와 배포 검증](../docs/DEVELOPMENT.md#배포-파일)
 
 프로젝트 이름을 바꾸면 다른 볼륨을 사용할 수 있습니다. `down -v` 또는 볼륨 삭제는 DB·비밀번호·세션·Google 연결까지 지우므로 일반 업데이트에 사용하지 않습니다. 백업은 중지 상태에서 `court_data` 볼륨 전체를 보관하세요. DB와 `credentials.key`를 반드시 함께 복원합니다.
 

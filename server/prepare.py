@@ -32,4 +32,5 @@ def prepare(root):
 if __name__ == "__main__":
     path = prepare(Path(__file__).resolve().parents[1])
     print("준비 완료. 관리자 암호 파일:", path)
-    print("전용 캘린더 ID를 .env에, 서비스 계정 JSON을 secrets/google-service-account.json에 설정하세요.")
+    print("Google Calendar 연동은 앱의 설정 → Google Calendar 연결에서 진행하세요.")
+    print("기존 Google 서비스 계정으로 운영하는 경우 server/README.md의 호환 설정을 참고하세요.")
