@@ -48,7 +48,7 @@ impl Worker {
         };
         self.reader = reader;
         match result {
-            Ok(observed) => self.store.complete(&job, &observed, at, &self.settings)?,
+            Ok(observed) => self.store.complete(&job, observed, at, &self.settings)?,
             Err(err) => {
                 self.store
                     .fail_case(&job, &err.to_string(), at, &self.settings)?;

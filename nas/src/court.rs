@@ -328,22 +328,56 @@ fn summarize(
             appeals.push(format!("{kind} 제기됨 ({detail})"));
         }
     }
+    let appeal_day = domain::day(&plain(&basic["aplYmd"])).replace('-', ".");
+    let dismissal_day = domain::day(&plain(&basic["aplRjctnYmd"])).replace('-', ".");
+    if !appeal_day.is_empty() {
+        appeals.push(format!("제기됨 ({appeal_day})"));
+    }
     if appeals.is_empty() {
-        let status = if !upper.is_empty() {
+        let status = if !dismissal_day.is_empty() {
+            "제기됨"
+        } else if !upper.is_empty() {
             "상소사건 확인됨"
         } else {
             match plain(first(basic, &["aplPrpndYn", "apelPrpndYn", "applPrpndYn"])).as_str() {
                 "Y" => "제기됨",
-                "N" => "제기 내역 없음",
-                _ => "제기 내역 확인되지 않음",
+                "N" => domain::NO_APPEAL,
+                _ => domain::UNKNOWN_APPEAL,
             }
         };
         appeals.push(status.to_owned());
+    }
+    if !dismissal_day.is_empty() {
+        appeals.push(format!("상소각하 ({dismissal_day})"));
     }
     let result = plain(&basic["aplPrpndRsltNm"]);
     if !result.is_empty() {
         appeals.push(result);
     }
+    let mut finality_day = domain::day(&plain(&basic["csCfmtnYmd"]));
+    if finality_day.is_empty() && !day.is_empty() {
+        finality_day = items(&data["dlt_hrngProgCurst"])
+            .chain(
+                progress
+                    .into_iter()
+                    .flat_map(|p| items(&p["dlt_csProgCtt"])),
+            )
+            .filter(|row| {
+                ["progCtt", "progCtt1", "progRslt"].iter().any(|key| {
+                    let text: String = plain(&row[key]).split_whitespace().collect();
+                    matches!(text.as_str(), "판결확정" | "판결이확정됨")
+                })
+            })
+            .map(|row| domain::day(&plain(&row["progYmd"])))
+            .filter(|at| at >= &day)
+            .max()
+            .unwrap_or_default();
+    }
+    let finality = if finality_day.is_empty() {
+        UNKNOWN.to_owned()
+    } else {
+        format!("확정됨 ({})", finality_day.replace('-', "."))
+    };
     let upper = if upper.is_empty() {
         String::new()
     } else {
@@ -359,6 +393,7 @@ fn summarize(
         ("선고일자".into(), shown(day.replace('-', "."))),
         ("상소제기 여부".into(), appeals.join(" / ")),
         ("상소사건번호".into(), shown(upper)),
+        ("확정 여부".into(), finality),
     ]
     .into()
 }
@@ -843,7 +878,7 @@ mod tests {
     #[test]
     fn court_fields_produce_roles_appeals_and_progress() {
         let data = json!({
-            "dma_csBasCtt":{"csNo":"123","csUltmtDvsNm":"원고일부승","csUltmtYmd":"20260131"},
+            "dma_csBasCtt":{"csNo":"123","csUltmtDvsNm":"원고일부승","csUltmtYmd":"20260131","aplYmd":"20260206","csCfmtnYmd":"20260227"},
             "dlt_inscrtDtsLst":[{"userCsNo":"2026누2","cortNm":"가상상급법원"}],
             "dlt_btprtCttLst":[{"btprtNm":"김○○","btprtDvsNm":"원고"},{"btprtNm":"이가상","btprtDvsNm":"피고"}],
             "dlt_rcntDxdyLst":[{"dxdyYmd":"20260131","dxdyHm":"1430","dxdyKndNm":"선고기일"}]
@@ -864,7 +899,9 @@ mod tests {
         assert_eq!(observation.case_category, "행정");
         assert_eq!(observation.party_role, "원고");
         assert_eq!(observation.text("판결 주문"), "원고일부승");
+        assert_eq!(observation.text("상소제기 여부"), "제기됨 (2026.02.06)");
         assert_eq!(observation.text("상소사건번호"), "가상상급법원 2026누2");
+        assert_eq!(observation.text("확정 여부"), "확정됨 (2026.02.27)");
         assert_eq!(observation.hearings[0].clock, "14:30");
         assert_eq!(observation.progress.unwrap().len(), 1);
     }
@@ -889,6 +926,26 @@ mod tests {
         assert!(observation.cancelled_verdict_days.contains("2026-01-15"));
         assert_eq!(observation.text("선고일자"), UNKNOWN);
         assert_eq!(observation.hearings[0].kind, "변론");
+    }
+
+    #[test]
+    fn finality_requires_an_official_date_or_judgment_entry() {
+        let data =
+            json!({"dma_csBasCtt":{"btprtUltmtThrstCtt":"징역 1년","btprtUltmtYmd":"20260131"}});
+        let read = |progress: &Value| {
+            summarize(&data, Some(progress), "2024고단3", &HashMap::new())["확정 여부"].clone()
+        };
+        let mut progress = json!({"dlt_csProgCtt":[
+            {"progYmd":"20260130","progCtt":"판결 확정"},
+            {"progYmd":"20260201","progCtt":"판결 확정 증명 신청"},
+            {"progYmd":"20260202","progCtt":"판결선고"}
+        ]});
+        assert_eq!(read(&progress), UNKNOWN);
+        progress["dlt_csProgCtt"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"progYmd":"20260206","progCtt":"판결 확정"}));
+        assert_eq!(read(&progress), "확정됨 (2026.02.06)");
     }
 
     #[tokio::test]

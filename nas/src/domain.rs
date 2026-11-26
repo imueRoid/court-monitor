@@ -9,6 +9,8 @@ use std::{
 };
 
 pub const UNKNOWN: &str = "확인되지 않음";
+pub const UNKNOWN_APPEAL: &str = "제기 내역 확인되지 않음";
+pub const NO_APPEAL: &str = "제기 내역 없음";
 
 #[derive(Clone, Default, Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[serde(default)]
@@ -66,6 +68,15 @@ pub struct Observation {
     pub warnings: Vec<String>,
     pub case_category: String,
     pub party_role: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JudgmentStage {
+    BeforeVerdict,
+    AwaitingVerdict,
+    CheckingOrder,
+    Decided,
 }
 
 pub fn day(value: &str) -> String {
@@ -143,6 +154,41 @@ impl Observation {
         self.summary.get(field).map(String::as_str).unwrap_or("")
     }
 
+    pub fn retain_judgment(&mut self, previous: &Self) {
+        if !previous.order() {
+            return;
+        }
+        let old_day = day(previous.text("선고일자"));
+        let new_day = day(self.text("선고일자"));
+        if !old_day.is_empty()
+            && ((!new_day.is_empty() && new_day != old_day)
+                || self.cancelled_verdict_days.contains(&old_day)
+                || !self.order()
+                    && self
+                        .hearings
+                        .iter()
+                        .any(|h| h.day > old_day && (trial(h) || h.kind == "선고")))
+        {
+            return;
+        }
+        if !self.order() {
+            self.summary
+                .insert("판결 주문".into(), previous.text("판결 주문").into());
+        }
+        let unknown = |text: &str| ["", UNKNOWN, UNKNOWN_APPEAL].contains(&text.trim());
+        let no_appeal = self.text("상소제기 여부") == NO_APPEAL;
+        for field in ["선고일자", "상소제기 여부", "상소사건번호", "확정 여부"]
+        {
+            if no_appeal && field == "상소사건번호" {
+                continue;
+            }
+            let prior = previous.text(field);
+            if unknown(self.text(field)) && !unknown(prior) {
+                self.summary.insert(field.into(), prior.into());
+            }
+        }
+    }
+
     pub fn normalize(&mut self) {
         self.hearings.retain(|h| !day(&h.day).is_empty());
         for hearing in &self.hearings {
@@ -203,6 +249,49 @@ impl Observation {
                     && (h.clock.is_empty()
                         || h.moment(now.timezone()).is_some_and(|moment| moment >= now))
         })
+    }
+
+    fn verdict_day(&self, remembered: &str) -> String {
+        let reported = day(self.text("선고일자"));
+        if !reported.is_empty() {
+            return reported;
+        }
+        if let Some(hearing) = self.hearings.iter().rev().find(|h| h.kind == "선고") {
+            return hearing.day.clone();
+        }
+        let resumed = !self.order()
+            && self
+                .hearings
+                .iter()
+                .any(|h| trial(h) && h.day.as_str() > remembered);
+        if resumed || self.cancelled_verdict_days.contains(remembered) {
+            return String::new();
+        }
+        remembered.to_owned()
+    }
+
+    pub fn judgment_stage(
+        &self,
+        today: &str,
+        upcoming: Option<&Hearing>,
+        remembered: &str,
+    ) -> JudgmentStage {
+        if self.order() {
+            return JudgmentStage::Decided;
+        }
+        if let Some(hearing) = upcoming.filter(|h| h.kind == "선고") {
+            return if hearing.day.as_str() > today {
+                JudgmentStage::AwaitingVerdict
+            } else {
+                JudgmentStage::CheckingOrder
+            };
+        }
+        let verdict_day = self.verdict_day(remembered);
+        if !verdict_day.is_empty() && verdict_day.as_str() <= today {
+            JudgmentStage::CheckingOrder
+        } else {
+            JudgmentStage::BeforeVerdict
+        }
     }
 
     pub fn interval(&self, now: DateTime<Tz>) -> Value {
@@ -308,29 +397,7 @@ pub fn schedule(
     count_day: &str,
 ) -> Schedule {
     let today = now.date_naive().to_string();
-    let continued = o
-        .hearings
-        .iter()
-        .rev()
-        .find(|h| trial(h))
-        .map(|h| h.day.as_str())
-        .unwrap_or("");
-    let remembered =
-        if o.cancelled_verdict_days.contains(remembered) || !o.order() && remembered < continued {
-            ""
-        } else {
-            remembered
-        };
-    let mut verdict_day = day(o.text("선고일자"));
-    if verdict_day.is_empty() {
-        verdict_day = o
-            .hearings
-            .iter()
-            .rev()
-            .find(|h| h.kind == "선고")
-            .map_or(remembered, |h| &h.day)
-            .to_owned();
-    }
+    let verdict_day = o.verdict_day(remembered);
     let mut count = if count_day == today {
         previous_count
     } else {
@@ -455,4 +522,89 @@ pub fn event_payload(
         json!({"summary":title,"description":description,"location":if h.location.is_empty(){court}else{&h.location},
         "visibility":"private","extendedProperties":{"private":{"app":"court-monitor","case_id":id}},"start":start,"end":end}),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn verdict_stage(o: &Observation, utc: &str, remembered: &str) -> JudgmentStage {
+        let moment = DateTime::parse_from_rfc3339(utc)
+            .unwrap()
+            .with_timezone(&chrono_tz::Asia::Seoul);
+        o.judgment_stage(&moment.date_naive().to_string(), o.next(moment), remembered)
+    }
+
+    #[test]
+    fn upcoming_verdict_switches_to_checking_at_seoul_midnight() {
+        let mut observation = Observation {
+            hearings: vec![Hearing {
+                day: "2026-11-28".into(),
+                clock: "14:00".into(),
+                kind: "선고".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert_eq!(
+            verdict_stage(&observation, "2026-11-27T14:59:59Z", ""),
+            JudgmentStage::AwaitingVerdict
+        );
+        for utc in [
+            "2026-11-27T15:00:00Z",
+            "2026-11-28T06:00:00Z",
+            "2026-11-30T00:00:00Z",
+        ] {
+            assert_eq!(
+                verdict_stage(&observation, utc, ""),
+                JudgmentStage::CheckingOrder
+            );
+        }
+        observation
+            .summary
+            .insert("판결 주문".into(), "청구를 기각한다.".into());
+        assert_eq!(
+            verdict_stage(&observation, "2026-11-28T06:00:00Z", ""),
+            JudgmentStage::Decided
+        );
+    }
+
+    #[test]
+    fn ordinary_next_hearing_stays_before_verdict_and_cancelled_dates_are_ignored() {
+        let mut observation = Observation {
+            hearings: vec![
+                Hearing {
+                    day: "2026-11-22".into(),
+                    kind: "선고".into(),
+                    result: "기일 변경".into(),
+                    ..Default::default()
+                },
+                Hearing {
+                    day: "2026-11-27".into(),
+                    kind: "변론".into(),
+                    ..Default::default()
+                },
+                Hearing {
+                    day: "2026-11-30".into(),
+                    kind: "선고".into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        observation.normalize();
+        assert_eq!(
+            verdict_stage(&observation, "2026-11-26T00:00:00Z", "2026-11-22"),
+            JudgmentStage::BeforeVerdict
+        );
+        observation.hearings.clear();
+        assert_eq!(
+            verdict_stage(&observation, "2026-11-26T00:00:00Z", "2026-11-22"),
+            JudgmentStage::BeforeVerdict
+        );
+        assert_eq!(
+            verdict_stage(&observation, "2026-11-26T00:00:00Z", "2026-11-23"),
+            JudgmentStage::CheckingOrder
+        );
+    }
 }
