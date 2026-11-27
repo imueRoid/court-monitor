@@ -1,7 +1,7 @@
-FROM rust:1.100-slim-bookworm AS nas-build
+FROM rust:1.100.0-slim-bookworm AS nas-build
 
 WORKDIR /build
-COPY nas/Cargo.toml nas/Cargo.lock ./
+COPY nas/rust-toolchain.toml nas/Cargo.toml nas/Cargo.lock ./
 COPY nas/src ./src
 RUN rustc --version && cargo build --locked --release
 
