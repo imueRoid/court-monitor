@@ -889,7 +889,14 @@ impl Court {
         let image = STANDARD
             .decode(image.rsplit(',').next().unwrap_or_default())
             .context("보안문자 이미지 형식이 변경되었습니다.")?;
-        let answer = ocr.recognize(&image)?;
+        let mut reader = std::mem::take(ocr);
+        let (reader, answer) = tokio::task::spawn_blocking(move || {
+            let answer = reader.recognize(&image);
+            (reader, answer)
+        })
+        .await?;
+        *ocr = reader;
+        let answer = answer?;
         params["captchaAnswer"] = json!(format!("{answer}{token}"));
         let general = self.query(general_path, &params, &Value::Null).await?;
         let basic = &general["dma_csBasCtt"];

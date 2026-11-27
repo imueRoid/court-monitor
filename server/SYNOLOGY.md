@@ -43,6 +43,19 @@ NAS가 구형 `docker-compose` 명령을 사용한다면 같은 인수로 실행
 - Compose의 `restart: unless-stopped`는 비정상 종료·재부팅 후 재실행에 사용합니다. 명시적으로 중지한 컨테이너는 직접 다시 시작해야 할 수 있습니다.
 - Google 연결 해제는 이 NAS에 저장한 토큰을 지웁니다. 기존 Google 캘린더와 일정은 보존합니다.
 
+### 서버 진단 로그
+
+- 로그인 후 **설정 → 서버 진단 로그**에서 서버 시작·종료, 자동 복구, 백그라운드 작업 오류의 최근 기록을 볼 수 있습니다. 기록 시각은 UTC입니다.
+- 서버 응답 확인이 3회 연속 실패하면 감시 프로세스가 앱을 다시 시작하며, 그 시점도 기록합니다. 로그는 `court_data` 볼륨의 `/data/diagnostics`에 저장되므로 앱이나 컨테이너를 다시 시작해도 같은 볼륨에서 확인할 수 있습니다.
+- 웹 화면을 열 수 없지만 NAS의 Docker에 접속할 수 있다면 아래 명령으로 볼륨을 읽기 전용으로 열 수 있습니다. 첫 줄의 값을 실제 사건일정관리 컨테이너 이름으로 바꿉니다.
+
+  ```sh
+  container=컨테이너이름
+  image=$(docker inspect --format '{{.Image}}' "$container")
+  docker run --rm --network none --volumes-from "$container:ro" --entrypoint /bin/sh "$image" \
+    -c 'cat /data/diagnostics/*.log*'
+  ```
+
 ## 업데이트와 백업
 
 기존 Python 컨테이너에서 처음 옮기는 경우 Rust NAS 이미지를 받은 뒤 **같은 Compose 프로젝트에서 컨테이너를 재생성**합니다. 기존 시작 명령·상태 검사와 `/data` 볼륨을 사용하면 사건 데이터, 로그인 세션, Google 연결을 이어서 사용할 수 있습니다.

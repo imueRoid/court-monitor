@@ -30,6 +30,10 @@ fn number<T: std::str::FromStr>(name: &str, default: T) -> Result<T> {
     }
 }
 
+pub fn database_path() -> std::io::Result<PathBuf> {
+    std::path::absolute(env::var_os("DATABASE_PATH").unwrap_or_else(|| "/data/cases.sqlite3".into()))
+}
+
 impl Settings {
     pub fn from_env() -> Result<Self> {
         let explicit_file = env::var("ADMIN_PASSWORD_FILE").unwrap_or_default();
@@ -50,9 +54,7 @@ impl Settings {
             "관리자 암호는 8~256자여야 합니다."
         );
         let settings = Self {
-            database: std::path::absolute(
-                env::var_os("DATABASE_PATH").unwrap_or_else(|| "/data/cases.sqlite3".into()),
-            )?,
+            database: database_path()?,
             password,
             calendar_id: env::var("GOOGLE_CALENDAR_ID")
                 .unwrap_or_default()

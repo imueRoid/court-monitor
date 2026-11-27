@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import shutil
 import socket
+import sqlite3
 import subprocess
 import tempfile
 import time
@@ -44,6 +45,9 @@ class NativeNasTests(unittest.TestCase):
                 **os.environ,
                 "COURT_MONITOR_VERSION": "1.0.1", "COURT_MONITOR_RUNTIME": runtime,
                 "COURT_AUTO_UPDATE": "false", "DATABASE_PATH": str(database),
+                "TOKIO_WORKER_THREADS": "1",
+                "HTTPS_PROXY": "http://127.0.0.1:1", "https_proxy": "http://127.0.0.1:1",
+                "NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1",
             }
             session = requests.Session()
             session.trust_env = False
@@ -91,7 +95,9 @@ class NativeNasTests(unittest.TestCase):
 
             def login():
                 self.assertEqual(requests.get(base + "/api/update", timeout=2).status_code, 401)
+                self.assertEqual(requests.get(base + "/api/diagnostics", timeout=2).status_code, 401)
                 bootstrap = session.get(base + "/api/bootstrap", timeout=2).json()
+                self.assertTrue(bootstrap["diagnostics_available"])
                 self.assertEqual(bootstrap["csrf_token"], legacy_auth.csrf_token(legacy_session))
                 self.assertEqual(bootstrap["google"]["calendar_id"], "fixture-calendar")
                 redirect_uri = base + "/oauth/google/callback"
@@ -114,6 +120,30 @@ class NativeNasTests(unittest.TestCase):
                 self.assertTrue(session.post(base + "/api/login", headers={"Origin": base},
                     json={"password": "fixture-password"}, timeout=10).ok)
 
+                with sqlite3.connect(database) as connection:
+                    for _ in range(30):
+                        heartbeat = connection.execute(
+                            "SELECT value FROM meta WHERE key='worker_heartbeat'"
+                        ).fetchone()
+                        if heartbeat:
+                            break
+                        time.sleep(0.1)
+                    self.assertIsNotNone(heartbeat)
+                    connection.execute("BEGIN IMMEDIATE")
+                    time.sleep(2.3)
+                    self.assertEqual(session.get(base + "/health", timeout=1).status_code, 200)
+                    connection.rollback()
+
+            def diagnostics_after_rollback():
+                response = session.get(base + "/api/diagnostics", timeout=2)
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.headers["Cache-Control"], "no-store")
+                log = response.json()["log"]
+                self.assertIn("Starting app 1.0.1", log)
+                self.assertIn("App 1.0.3 failed to start", log)
+                self.assertNotIn(legacy_session, log)
+                self.assertNotIn("fixture-only", log)
+
             def stage(version, *, broken=False):
                 updates = data / "app-updates"
                 source = updates / "releases" / version
@@ -135,6 +165,6 @@ class NativeNasTests(unittest.TestCase):
             stage("1.0.2")
             start("1.0.2")
             stage("1.0.3", broken=True)
-            start("1.0.2")
+            start("1.0.2", diagnostics_after_rollback)
             self.assertEqual((data / "app-updates" / "failed").read_text(), "1.0.3")
             self.assertFalse((data / "app-updates" / "pending").exists())

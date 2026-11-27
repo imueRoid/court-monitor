@@ -11,7 +11,7 @@ PACKAGE = "court-monitor-app-linux-amd64.zip"
 MANIFEST = "court-monitor-update.json"
 RUNTIME_FILES = (
     ".dockerignore", "Dockerfile", "nas/ocr-assets.requirements", "nas/extract_ocr_assets.py",
-    "nas/Cargo.toml", "nas/Cargo.lock", "nas/src/main.rs",
+    "nas/Cargo.toml", "nas/Cargo.lock", "nas/src/main.rs", "nas/src/diagnostics.rs",
     "nas/src/releases.rs", "nas/src/supervise.rs",
     "scripts/package_update.py",
 )

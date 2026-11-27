@@ -36,3 +36,5 @@
 .metrics article{display:flex;flex-direction:column;justify-content:space-between;gap:4px;min-width:0;border:1px solid #dde5e8;background:#fff;padding:clamp(7px,1.3vw,13px);border-radius:9px}
 .metrics span{color:#5e727c;font-size:clamp(.78rem,2.9vw,1rem);line-height:1.35;word-break:keep-all;overflow-wrap:anywhere}
 .metrics strong{color:#184d49;font-size:clamp(1.2rem,4.7vw,1.65rem);line-height:1.15;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+
+#diagnostics-log{max-height:22rem;overflow:auto;background:#f3f6f8;border:1px solid #dfe7eb;border-radius:6px;padding:12px;white-space:pre-wrap;overflow-wrap:anywhere}

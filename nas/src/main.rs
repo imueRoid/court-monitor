@@ -2,6 +2,7 @@ mod api;
 mod auth;
 mod config;
 mod court;
+mod diagnostics;
 mod domain;
 mod google;
 mod ocr;
@@ -74,7 +75,15 @@ async fn main() -> Result<()> {
     } else if mode.as_deref() == Some("--serve") {
         let run_dir = PathBuf::from(args.next().expect("missing run directory"));
         let options = supervise::Listen::from_args(args)?;
-        if web::run(&run_dir, options).await? {
+        let journal = diagnostics::Journal::from_env()?;
+        let result = web::run(&run_dir, options, &journal).await;
+        if let Err(error) = &result {
+            journal.record(
+                diagnostics::Source::Server,
+                format_args!("App failed: {}", diagnostics::error_kind(error)),
+            );
+        }
+        if result? {
             std::process::exit(supervise::RESTART);
         }
     } else {

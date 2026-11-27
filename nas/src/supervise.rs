@@ -1,5 +1,9 @@
-use crate::releases::{version, Release, Updates, EXECUTABLE};
+use crate::{
+    diagnostics::{error_kind, Journal, Source},
+    releases::{version, Release, Updates, EXECUTABLE},
+};
 use anyhow::{bail, Context, Result};
+use reqwest::{Client, Url};
 use std::{
     env,
     path::{Path, PathBuf},
@@ -39,6 +43,24 @@ impl Listen {
         }
         anyhow::ensure!(listen.port != 0, "port must be between 1 and 65535");
         Ok(listen)
+    }
+
+    fn health_url(&self) -> Result<Url> {
+        let host = match self.host.as_str() {
+            "0.0.0.0" => "127.0.0.1",
+            "::" => "[::1]",
+            host => host,
+        };
+        let mut url = Url::parse("http://127.0.0.1/health")?;
+        if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+            url.set_ip_host(ip)
+                .map_err(|_| anyhow::anyhow!("invalid health check host"))?;
+        } else {
+            url.set_host(Some(host))?;
+        }
+        url.set_port(Some(self.port))
+            .map_err(|_| anyhow::anyhow!("invalid health check port"))?;
+        Ok(url)
     }
 }
 
@@ -118,6 +140,20 @@ async fn ready(child: &mut Child, receipt: &Path) -> Result<()> {
     }
 }
 
+async fn unresponsive(client: &Client, url: &Url, interval: Duration) {
+    let mut failures = 0;
+    loop {
+        sleep(interval).await;
+        match client.get(url.clone()).send().await {
+            Ok(response) if response.status().is_success() => failures = 0,
+            _ => failures += 1,
+        }
+        if failures >= 3 {
+            return;
+        }
+    }
+}
+
 fn app_command(
     bundled: &Path,
     source: &Path,
@@ -157,20 +193,28 @@ pub async fn run(listen: Listen) -> Result<()> {
     let bundled = env::current_exe()?;
     let base = env::current_dir()?;
     let installed = env::var("COURT_MONITOR_VERSION").unwrap_or_default();
+    let journal = Journal::from_env()?;
     let updates = Updates::from_env()?;
+    let health_url = listen.health_url()?;
+    let probe = Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(3))
+        .build()?;
     let enabled = updates.enabled(&installed);
     if enabled {
         tokio::select! {
             result = check_on_boot(&updates, &installed) => {
                 if let Err(error) = result {
                     eprintln!("Update check failed; starting the installed version: {error:#}");
+                    journal.record(Source::Supervisor, "Boot update check failed");
                 }
             }
             _ = stop(&mut term, &mut interrupt) => return Ok(()),
         }
     }
 
-    loop {
+    'supervise: loop {
         let history = if enabled {
             updates.history()
         } else {
@@ -192,6 +236,12 @@ pub async fn run(listen: Listen) -> Result<()> {
             .chain([None]);
         let mut status: Option<ExitStatus> = None;
         for release in candidates {
+            let id = release
+                .as_ref()
+                .map(|release| release.version.as_str())
+                .or_else(|| version(&installed).map(|_| installed.as_str()))
+                .unwrap_or("bundled");
+            journal.record(Source::Supervisor, format_args!("Starting app {id}"));
             let run_dir = tempfile::tempdir()?;
             let source = release
                 .as_ref()
@@ -203,6 +253,7 @@ pub async fn run(listen: Listen) -> Result<()> {
                 let started = tokio::select! {
                     result = ready(&mut child, &receipt) => result,
                     _ = stop(&mut term, &mut interrupt) => {
+                        journal.record(Source::Supervisor, "Stop requested during startup");
                         terminate(&mut child).await;
                         return Ok(());
                     },
@@ -221,11 +272,21 @@ pub async fn run(listen: Listen) -> Result<()> {
                         }
                     }
                     tokio::fs::write(run_dir.path().join("accepted"), b"").await?;
+                    journal.record(Source::Supervisor, format_args!("App {id} is ready"));
                     status = Some(tokio::select! {
+                        biased;
                         result = child.wait() => result?,
                         _ = stop(&mut term, &mut interrupt) => {
+                            journal.record(Source::Supervisor, "Stop requested");
                             terminate(&mut child).await;
                             return Ok(());
+                        },
+                        _ = unresponsive(&probe, &health_url, Duration::from_secs(15)) => {
+                            journal.record(Source::Supervisor, format_args!(
+                                "App {id} failed 3 health checks; restarting"
+                            ));
+                            terminate(&mut child).await;
+                            continue 'supervise;
                         },
                     });
                     break;
@@ -235,6 +296,11 @@ pub async fn run(listen: Listen) -> Result<()> {
             } else {
                 launched.map(|_| ()).map_err(Into::into)
             };
+            let error = start.as_ref().unwrap_err();
+            journal.record(
+                Source::Supervisor,
+                format_args!("App {id} failed to start: {}", error_kind(error)),
+            );
             if let Some(release) = release {
                 eprintln!(
                     "Release {} could not start; falling back: {:#}",
@@ -253,9 +319,11 @@ pub async fn run(listen: Listen) -> Result<()> {
         }
         let status = status.context("no runnable NAS server")?;
         if status.code() != Some(RESTART) {
+            journal.record(Source::Supervisor, format_args!("App exited ({status})"));
             anyhow::ensure!(status.success(), "NAS server terminated ({status})");
             return Ok(());
         }
+        journal.record(Source::Supervisor, "Restart requested by app update");
     }
 }
 
@@ -269,5 +337,23 @@ mod tests {
         let listen = Listen::from_args(args.split_whitespace().map(str::to_owned)).unwrap();
         assert_eq!(listen.port, 7708);
         assert_eq!(listen.host, "0.0.0.0");
+        assert_eq!(
+            listen.health_url().unwrap().as_str(),
+            "http://127.0.0.1:7708/health"
+        );
+    }
+
+    #[test]
+    fn watchdog_uses_the_local_address_of_ipv6_listeners() {
+        for (host, address) in [("::", "[::1]"), ("::1", "[::1]")] {
+            let listen = Listen {
+                host: host.into(),
+                port: 7708,
+            };
+            assert_eq!(
+                listen.health_url().unwrap().as_str(),
+                format!("http://{address}:7708/health")
+            );
+        }
     }
 }

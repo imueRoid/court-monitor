@@ -2,6 +2,7 @@ use crate::{
     api,
     auth::Auth,
     config::Settings,
+    diagnostics::{error_kind, Journal, Source},
     google::Google,
     releases::{version, Release, Updates},
     store::Store,
@@ -38,6 +39,7 @@ pub struct App {
     pub auth: Arc<Auth>,
     pub store: Store,
     pub google: Arc<Google>,
+    pub journal: Journal,
     pub build: Value,
     updates: Updates,
     installed: String,
@@ -212,7 +214,7 @@ async fn apply(State(app): State<Arc<App>>, Json(payload): Json<Apply>) -> Respo
     )
 }
 
-pub async fn run(directory: &Path, listen: Listen) -> Result<bool> {
+pub async fn run(directory: &Path, listen: Listen, journal: &Journal) -> Result<bool> {
     let mut term = signal(SignalKind::terminate())?;
     let mut interrupt = signal(SignalKind::interrupt())?;
     let listener = TcpListener::bind((listen.host.as_str(), listen.port)).await?;
@@ -231,6 +233,7 @@ pub async fn run(directory: &Path, listen: Listen) -> Result<bool> {
         settings: settings.clone(),
         auth,
         google: google.clone(),
+        journal: journal.clone(),
         build: json!({"version":installed,
            "revision":env::var("COURT_MONITOR_REVISION").unwrap_or_else(|_|"unknown".into()),
            "created":env::var("COURT_MONITOR_CREATED").unwrap_or_default()}),
@@ -263,11 +266,17 @@ pub async fn run(directory: &Path, listen: Listen) -> Result<bool> {
         .await
     });
     tokio::fs::write(directory.join("ready"), b"").await?;
-    let court = tokio::spawn(worker::court(store, settings));
-    let calendar = tokio::spawn(worker::calendar(google));
+    let mut court = tokio::spawn(worker::court(store, settings, journal.clone()));
+    let mut calendar = tokio::spawn(worker::calendar(google, journal.clone()));
     let mut restart = false;
     let result = tokio::select! {
-        result=&mut server=>result.map_err(anyhow::Error::from).and_then(|result|result.map_err(Into::into)),
+        result=&mut server=>unexpected_exit(
+            result.map_err(Into::into).and_then(|result| result.map_err(Into::into)),
+            "HTTP server",
+            journal,
+        ),
+        result=&mut court=>unexpected_exit(result.map_err(Into::into), "Court worker", journal),
+        result=&mut calendar=>unexpected_exit(result.map_err(Into::into), "Calendar worker", journal),
         _=term.recv()=>Ok(()),
         _=interrupt.recv()=>Ok(()),
         _=requested.changed()=>{restart=*requested.borrow(); Ok(())},
@@ -282,4 +291,17 @@ pub async fn run(directory: &Path, listen: Listen) -> Result<bool> {
     }
     result?;
     Ok(restart)
+}
+
+fn unexpected_exit(result: Result<()>, task: &str, journal: &Journal) -> Result<()> {
+    let reason = match &result {
+        Ok(()) => "task ended".into(),
+        Err(error) => error_kind(error),
+    };
+    journal.record(
+        Source::Server,
+        format_args!("{task} stopped unexpectedly: {reason}"),
+    );
+    result?;
+    anyhow::bail!("{task} stopped unexpectedly")
 }

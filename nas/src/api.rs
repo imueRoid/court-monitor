@@ -128,6 +128,7 @@ pub fn protected() -> Router<Arc<App>> {
         .route("/api/cases/{id}/active", post(active))
         .route("/api/cases/{id}/events", get(events))
         .route("/api/logs", get(logs))
+        .route("/api/diagnostics", get(diagnostics))
         .route("/api/export", get(export))
         .route("/api/google/status", get(google_status))
         .route("/api/google/client", post(google_client))
@@ -309,7 +310,7 @@ async fn bootstrap(
     blocking(move|| {
         let s=&app.settings;
         Ok(Json(json!({"csrf_token":app.auth.csrf(&session.0),"timezone":s.timezone.name(),"session_days":s.session_days,
-            "build":app.build,"google":app.google.status()?,"courts":app.store.meta::<Vec<String>>("courts")?.unwrap_or_default(),
+            "build":app.build,"diagnostics_available":true,"google":app.google.status()?,"courts":app.store.meta::<Vec<String>>("courts")?.unwrap_or_default(),
             "calendar_configured":app.google.configured()?,"verdict_checks_per_day":s.verdict_checks_per_day,
             "verdict_retry_minutes":s.verdict_retry_minutes,"watch_hours":[s.watch_start_hour,s.watch_end_hour]})))
     }).await
@@ -454,6 +455,11 @@ async fn logs(State(app): State<Arc<App>>) -> Reply<Json<Value>> {
     ))
 }
 
+async fn diagnostics(State(app): State<Arc<App>>) -> Reply<Json<Value>> {
+    let log = blocking(move || Ok(app.journal.latest()?)).await?;
+    Ok(Json(json!({"log": log})))
+}
+
 async fn export(State(app): State<Arc<App>>) -> Reply<Json<Value>> {
     Ok(Json(blocking(move || app.store.export()).await?))
 }
@@ -503,10 +509,8 @@ async fn google_start(
     if !allowed {
         return Err(invalid("현재 접속한 주소의 콜백 URL을 사용하세요."));
     }
-    let url = app
-        .google
-        .begin(&input.redirect_uri, &session.0)
-        .map_err(|err| invalid(&err.to_string()))?;
+    let result = blocking(move || Ok(app.google.begin(&input.redirect_uri, &session.0))).await?;
+    let url = result.map_err(|err| invalid(&err.to_string()))?;
     Ok(Json(json!({"url":url})))
 }
 

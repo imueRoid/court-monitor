@@ -12,7 +12,7 @@ use ring::signature::{RsaKeyPair, RSA_PKCS1_SHA256};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
 use std::{fs, io::Write, os::unix::fs::OpenOptionsExt, sync::Arc, time::Duration};
-use tokio::sync::Mutex;
+use tokio::{sync::Mutex, task::block_in_place};
 
 pub const CALLBACK: &str = "/oauth/google/callback";
 const AUTH: &str = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -164,6 +164,10 @@ impl Google {
 
     pub async fn configure(&self, raw: Value) -> Result<Value> {
         let _gate = self.gate.lock().await;
+        block_in_place(|| self.configure_client(raw))
+    }
+
+    fn configure_client(&self, raw: Value) -> Result<Value> {
         let web = &raw["web"];
         let id = text(&web["client_id"]);
         let secret = text(&web["client_secret"]);
@@ -292,17 +296,19 @@ impl Google {
     ) -> Result<()> {
         let _gate = self.gate.lock().await;
         if denied {
-            self.consume(state, session)?;
-            return self.store.set_meta(
-                "google_error",
-                "Google 연결이 취소되었습니다. 연결 버튼으로 다시 시도할 수 있습니다.",
-            );
+            return block_in_place(|| {
+                self.consume(state, session)?;
+                self.store.set_meta(
+                    "google_error",
+                    "Google 연결이 취소되었습니다. 연결 버튼으로 다시 시도할 수 있습니다.",
+                )
+            });
         }
         ensure!(
             !code.is_empty() && code.len() <= 4096,
             "Google 인증 코드가 없습니다. 다시 연결하세요."
         );
-        let (verifier, uri, client, version) = self.consume(state, session)?;
+        let (verifier, uri, client, version) = block_in_place(|| self.consume(state, session))?;
         let id = text(&client["client_id"]);
         let secret = text(&client["client_secret"]);
         let result=self.token_request(&[("grant_type","authorization_code"),("code",code),("redirect_uri",&uri),
@@ -321,18 +327,24 @@ impl Google {
         );
         let mut credentials = json!({"refresh_token":refresh,"token_uri":TOKEN,"client_id":id,"client_secret":secret,"scopes":[SCOPE]});
         merge_token(&mut credentials, &result)?;
-        self.store.write(|db| {
-            ensure!(
-                generation(db)? == version,
-                "연결 설정이 변경되었습니다. 다시 연결하세요."
-            );
-            self.save(db, "google_pending_tokens", &credentials)
+        block_in_place(|| {
+            self.store.write(|db| {
+                ensure!(
+                    generation(db)? == version,
+                    "연결 설정이 변경되었습니다. 다시 연결하세요."
+                );
+                self.save(db, "google_pending_tokens", &credentials)
+            })
         })?;
         self.prepare_locked().await
     }
 
     pub async fn disconnect(&self) -> Result<Value> {
         let _gate = self.gate.lock().await;
+        block_in_place(|| self.clear_connection())
+    }
+
+    fn clear_connection(&self) -> Result<Value> {
         self.store.write(|db| {
             db.execute(
                 "DELETE FROM meta WHERE key IN ('google_tokens','google_pending_tokens')",
@@ -348,14 +360,12 @@ impl Google {
     pub async fn prepare(&self) -> Result<Value> {
         let _gate = self.gate.lock().await;
         self.prepare_locked().await?;
-        self.status()
+        block_in_place(|| self.status())
     }
 
     async fn prepare_locked(&self) -> Result<()> {
-        let original = self
-            .store
-            .meta::<Value>("google_calendar")?
-            .unwrap_or_default();
+        let original =
+            block_in_place(|| self.store.meta::<Value>("google_calendar"))?.unwrap_or_default();
         let mut calendar = Value::Null;
         let key = "google_pending_tokens";
         if !text(&original["id"]).is_empty() {
@@ -386,7 +396,12 @@ impl Google {
             ensure!(response.status().is_success(),"전용 캘린더를 만들지 못했습니다. Google Calendar API 사용 설정과 권한을 확인하세요.");
             calendar = response.json().await?;
         }
+        block_in_place(|| self.save_calendar(&calendar))
+    }
+
+    fn save_calendar(&self, calendar: &Value) -> Result<()> {
         let id = text(&calendar["id"]);
+        let key = "google_pending_tokens";
         ensure!(
             !id.is_empty(),
             "Google에서 올바른 캘린더 ID를 받지 못했습니다."
@@ -427,7 +442,7 @@ impl Google {
 
     async fn access(&self, key: Option<&str>, refresh: bool) -> Result<String> {
         if let Some(key) = key {
-            let mut tokens = self.secret(&self.store.connection()?, key)?;
+            let mut tokens = block_in_place(|| self.secret(&self.store.connection()?, key))?;
             let token = text(&tokens["token"]);
             let expiry = expiry(text(&tokens["expiry"]));
             if !refresh && !token.is_empty() && expiry > now() + 120.0 {
@@ -444,7 +459,7 @@ impl Google {
                 ])
                 .await?;
             merge_token(&mut tokens, &result)?;
-            self.store.write(|db| self.save(db, key, &tokens))?;
+            block_in_place(|| self.store.write(|db| self.save(db, key, &tokens)))?;
             return Ok(text(&tokens["token"]).to_owned());
         }
         let mut cached = self.service_token.lock().await;
@@ -455,7 +470,7 @@ impl Google {
             let _ = expiry;
             return Ok(token.clone());
         }
-        let account = self.service_info()?;
+        let account = block_in_place(|| self.service_info())?;
         ensure!(
             account["type"] == "service_account",
             "Google 서비스 계정 인증정보를 확인하세요."
@@ -532,8 +547,17 @@ impl Google {
 
     pub async fn sync_one(&self) -> Result<bool> {
         let _gate = self.gate.lock().await;
-        if !self.configured()? {
+        let Some((target, key, event)) = block_in_place(|| self.claim_sync())? else {
             return Ok(false);
+        };
+        let result = self.upsert(&target, &event, key).await;
+        block_in_place(|| self.finish_sync(&event, result))?;
+        Ok(true)
+    }
+
+    fn claim_sync(&self) -> Result<Option<(String, Option<&'static str>, Event)>> {
+        if !self.configured()? {
+            return Ok(None);
         }
         let oauth = self.store.meta::<String>("google_mode")?.as_deref() == Some("oauth");
         let target = if oauth {
@@ -549,12 +573,15 @@ impl Google {
         };
         let key = oauth.then_some("google_tokens");
         self.store.write(|db| calendar_target(db, &target))?;
-        let Some(event) = self.store.claim_event(now())? else {
-            return Ok(false);
-        };
-        let result = self.upsert(&target, &event, key).await;
+        Ok(self
+            .store
+            .claim_event(now())?
+            .map(|event| (target, key, event)))
+    }
+
+    fn finish_sync(&self, event: &Event, result: Result<Option<(StatusCode, u32)>>) -> Result<()> {
         match result {
-            Ok(None) => self.store.event_synced(&event, now())?,
+            Ok(None) => self.store.event_synced(event, now()),
             Ok(Some((status, delay))) => {
                 let message = match status {
                     StatusCode::UNAUTHORIZED => "Google 인증을 확인하세요.",
@@ -565,18 +592,11 @@ impl Google {
                     StatusCode::TOO_MANY_REQUESTS => "Google Calendar 요청 한도에 도달했습니다.",
                     _ => "Google Calendar 일정을 갱신하지 못했습니다.",
                 };
-                self.store.event_failed(
-                    &event,
-                    &format!("{message} (HTTP {status})"),
-                    now(),
-                    delay,
-                )?;
+                self.store
+                    .event_failed(event, &format!("{message} (HTTP {status})"), now(), delay)
             }
-            Err(error) => self
-                .store
-                .event_failed(&event, &error.to_string(), now(), 0)?,
+            Err(error) => self.store.event_failed(event, &error.to_string(), now(), 0),
         }
-        Ok(true)
     }
 
     async fn upsert(
@@ -687,7 +707,7 @@ mod tests {
     };
     use tokio::net::TcpListener;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn exchanges_oauth_code_preserves_calendar_and_retries_duplicate_event() -> Result<()> {
         let fixture = tempfile::tempdir()?;
         let settings = Arc::new(Settings::from_env()?);
