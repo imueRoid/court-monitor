@@ -25,6 +25,7 @@ from PIL import Image, ImageDraw
 from court_picker import CourtPicker
 from desktop_runtime import (APP_NAME, VERSION, DesktopGoogleConnection, SingleInstance, Startup,
                              WindowsVault, data_directory, pc_settings, render_guide, save_preferences, validate_case)
+from desktop_updates import check_update, release_page
 from server.domain import next_hearing
 from server.google_calendar import GoogleCalendar
 from server.store import Store
@@ -43,7 +44,8 @@ def tray_image():
 
 
 class MonitorApp(tk.Tk):
-    def __init__(self, folder=None, *, start_worker=True, with_tray=True, startup=False, startup_manager=None):
+    def __init__(self, folder=None, *, start_worker=True, with_tray=True, startup=False,
+                 startup_manager=None, check_updates=True):
         super().__init__()
         self.withdraw()
         self.title("사건 일정 관리 · PC")
@@ -58,6 +60,9 @@ class MonitorApp(tk.Tk):
         self.selected_ids, self.records = set(), {}
         self.page, self.pages, self.selected, self.task_count = 1, 1, None, 0
         self.closing, self.tray, self.worker = False, None, None
+        self._update_job = None
+        self._checking_update = False
+        self._new_version = None
         self.signal = self.store.get_meta("desktop_show_requested")
         self.connection = DesktopGoogleConnection(self.store)
         self.preferences = self.store.get_meta("desktop_preferences", {"auto_start":False, "background":False})
@@ -82,6 +87,8 @@ class MonitorApp(tk.Tk):
         self._poll_job = self.after(3000, self._poll)
         if not (startup and self.preferences.get("background") and self.tray):
             self.show_window()
+        if check_updates:
+            self._poll_updates()
 
     def _build(self):
         style = ttk.Style(self)
@@ -91,6 +98,10 @@ class MonitorApp(tk.Tk):
         outer.pack(fill="both", expand=True)
         ttk.Label(outer, text="사건 일정 관리", font=("맑은 고딕", 22, "bold")).pack(anchor="w")
         ttk.Label(outer, text="PC에서 사건을 확인하고 Google Calendar에 기일과 선고 결과를 반영합니다.").pack(anchor="w", pady=(4, 12))
+        self.update_banner = ttk.Frame(outer)
+        self.update_notice = tk.StringVar()
+        ttk.Label(self.update_banner, textvariable=self.update_notice).pack(side="left", padx=(0, 10))
+        ttk.Button(self.update_banner, text="설치 파일 받기", command=self._open_update).pack(side="left")
         self.tabs = ttk.Notebook(outer)
         self.tabs.pack(fill="both", expand=True)
         cases = ttk.Frame(self.tabs, padding=12)
@@ -183,7 +194,13 @@ class MonitorApp(tk.Tk):
         ttk.Label(self.settings_tab, text="기존 NAS용 OAuth JSON 대신 '데스크톱 앱' 유형의 JSON을 등록하세요.\n연결하면 이 PC가 관리할 전용 캘린더를 자동 생성합니다. Google 로그인은 기본 브라우저에서 진행합니다.", wraplength=1000).pack(anchor="w", pady=12)
         ttk.Separator(self.settings_tab).pack(fill="x", pady=8)
         ttk.Label(self.settings_tab, text=f"버전 {VERSION} · 데이터 저장 위치: {self.folder}\n사건·예약·설정은 PC의 SQLite DB에 보관하며, Google 인증정보는 Windows 사용자 계정으로 암호화합니다.", wraplength=1000).pack(anchor="w", pady=12)
-        ttk.Button(self.settings_tab, text="데이터 폴더 열기", command=lambda: os.startfile(self.folder)).pack(anchor="w")
+        tools = ttk.Frame(self.settings_tab)
+        tools.pack(anchor="w")
+        ttk.Button(tools, text="데이터 폴더 열기", command=lambda: os.startfile(self.folder)).pack(side="left", padx=(0, 8))
+        self.update_button = ttk.Button(tools, text="업데이트 확인", command=self._request_update)
+        self.update_button.pack(side="left", padx=(0, 8))
+        self.update_status = tk.StringVar()
+        ttk.Label(tools, textvariable=self.update_status).pack(side="left")
 
     @staticmethod
     def _write(widget, text):
@@ -214,6 +231,8 @@ class MonitorApp(tk.Tk):
             elif kind == "quit":
                 self.quit_app()
                 return
+            elif kind == "update":
+                self._show_update_result(*value)
             else:
                 self.task_count = max(0, self.task_count - 1)
                 self.status_text.set(value)
@@ -222,6 +241,44 @@ class MonitorApp(tk.Tk):
                 self.refresh()
         if not self.closing:
             self._drain_job = self.after(100, self._drain)
+
+    def _poll_updates(self):
+        self._request_update()
+        self._update_job = self.after(6 * 60 * 60 * 1000, self._poll_updates)
+
+    def _request_update(self):
+        if self._checking_update:
+            return
+        self._checking_update = True
+        self.update_button.state(["disabled"])
+        self.update_status.set("업데이트 확인 중…")
+
+        def run():
+            try:
+                self.events.put(("update", (check_update(VERSION), False)))
+            except (OSError, ValueError):
+                self.events.put(("update", (None, True)))
+
+        threading.Thread(target=run, name="desktop-update", daemon=True).start()
+
+    def _show_update_result(self, version, failed):
+        self._checking_update = False
+        self.update_button.state(["!disabled"])
+        if failed:
+            self.update_status.set("업데이트를 확인하지 못했습니다. 나중에 다시 시도하세요.")
+            return
+        self._new_version = version
+        if version:
+            self.update_notice.set(f"새 Windows 버전 {version}을 설치할 수 있습니다.")
+            self.update_banner.pack(fill="x", pady=(0, 8), before=self.tabs)
+            self.update_status.set(f"새 버전 {version} 사용 가능")
+        else:
+            self.update_banner.pack_forget()
+            self.update_status.set("최신 버전입니다.")
+
+    def _open_update(self):
+        if self._new_version:
+            webbrowser.open(release_page(self._new_version))
 
     def _poll(self):
         signal = self.store.get_meta("desktop_show_requested")
@@ -437,7 +494,8 @@ class MonitorApp(tk.Tk):
         self.withdraw()
         if self.tray:
             self.tray.stop()
-        for job in (getattr(self, "_drain_job", None), getattr(self, "_poll_job", None), self._search_job):
+        for job in (getattr(self, "_drain_job", None), getattr(self, "_poll_job", None),
+                    self._search_job, self._update_job):
             if job:
                 self.after_cancel(job)
         if self.worker:

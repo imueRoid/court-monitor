@@ -1,4 +1,4 @@
-name: Test and publish NAS app
+name: Test and publish Court Monitor
 
 on:
   push:
@@ -14,16 +14,16 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  docker:
+  identity:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      series: ${{ steps.meta.outputs.series }}
+      major: ${{ steps.meta.outputs.major }}
+      created: ${{ steps.meta.outputs.created }}
+      runtime: ${{ steps.meta.outputs.runtime }}
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-          cache: pip
-          cache-dependency-path: requirements-server.lock.txt
       - name: Build release identity
         id: meta
         run: |
@@ -43,11 +43,23 @@ jobs:
                   output.write(f"{key}={value}\n")
           print("Release version: " + version)
           PY
+
+  docker:
+    needs: identity
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements-server.lock.txt
       - name: Check whether the Docker runtime has changed
         id: runtime
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         env:
-          APP_RUNTIME: ${{ steps.meta.outputs.runtime }}
+          APP_RUNTIME: ${{ needs.identity.outputs.runtime }}
         run: |
           python - <<'PY'
           import json
@@ -88,16 +100,16 @@ jobs:
           provenance: false
           sbom: false
           build-args: |
-            APP_VERSION=${{ steps.meta.outputs.version }}
+            APP_VERSION=${{ needs.identity.outputs.version }}
             VCS_REF=${{ github.sha }}
-            BUILD_DATE=${{ steps.meta.outputs.created }}
-            APP_RUNTIME=${{ steps.meta.outputs.runtime }}
+            BUILD_DATE=${{ needs.identity.outputs.created }}
+            APP_RUNTIME=${{ needs.identity.outputs.runtime }}
           tags: court-monitor:test
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Check container login, version, SQLite restart and OCR runtime
         env:
-          EXPECTED_VERSION: ${{ steps.meta.outputs.version }}
+          EXPECTED_VERSION: ${{ needs.identity.outputs.version }}
         run: python tests/container_smoke.py
       - name: Check app update and rollback with an existing database
         run: |
@@ -122,26 +134,26 @@ jobs:
           provenance: false
           sbom: false
           build-args: |
-            APP_VERSION=${{ steps.meta.outputs.version }}
+            APP_VERSION=${{ needs.identity.outputs.version }}
             VCS_REF=${{ github.sha }}
-            BUILD_DATE=${{ steps.meta.outputs.created }}
-            APP_RUNTIME=${{ steps.meta.outputs.runtime }}
+            BUILD_DATE=${{ needs.identity.outputs.created }}
+            APP_RUNTIME=${{ needs.identity.outputs.runtime }}
           tags: |
             imueroid/court-monitor:latest
-            imueroid/court-monitor:${{ steps.meta.outputs.major }}
-            imueroid/court-monitor:${{ steps.meta.outputs.series }}
-            imueroid/court-monitor:${{ steps.meta.outputs.version }}
+            imueroid/court-monitor:${{ needs.identity.outputs.major }}
+            imueroid/court-monitor:${{ needs.identity.outputs.series }}
+            imueroid/court-monitor:${{ needs.identity.outputs.version }}
             imueroid/court-monitor:sha-${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Verify published format and version aliases
         if: steps.runtime.outputs.publish_image == 'true'
-        run: python tests/verify_published_image.py "${{ steps.meta.outputs.version }}" "${{ github.sha }}"
+        run: python tests/verify_published_image.py "${{ needs.identity.outputs.version }}" "${{ github.sha }}"
       - name: Package the NAS application
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         env:
-          APP_VERSION: ${{ steps.meta.outputs.version }}
-          BUILD_DATE: ${{ steps.meta.outputs.created }}
+          APP_VERSION: ${{ needs.identity.outputs.version }}
+          BUILD_DATE: ${{ needs.identity.outputs.created }}
         run: |
           python scripts/package_update.py --output release --binary /tmp/court-monitor-nas \
             --version "$APP_VERSION" --revision "$GITHUB_SHA" --created "$BUILD_DATE"
@@ -152,8 +164,63 @@ jobs:
           path: release/
           if-no-files-found: error
 
+  windows:
+    needs: identity
+    runs-on: windows-2025
+    timeout-minutes: 35
+    env:
+      APP_VERSION: ${{ needs.identity.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          architecture: x64
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-desktop.txt
+      - name: Install Windows build dependencies
+        run: python -m pip install -r requirements-desktop.txt
+      - name: Test the native Windows app
+        run: python -m unittest discover -s tests -p 'test_desktop*.py' -v
+      - name: Build the Windows executable
+        run: python build_windows.py --version "$env:APP_VERSION"
+      - name: Build the Windows installer
+        run: |
+          $compiler = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $compiler)) {
+            choco install innosetup --yes --no-progress
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          & $compiler "/DAppVersion=$env:APP_VERSION" installer/windows.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Install and test the packaged Windows app
+        run: |
+          $appDir = Join-Path $env:RUNNER_TEMP "CourtMonitorPC-release-check"
+          $report = Join-Path $env:RUNNER_TEMP "court-monitor-pc-report.json"
+          $setup = Start-Process -FilePath "dist/CourtMonitorPC-Setup.exe" -ArgumentList @(
+            "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-", ('/DIR="{0}"' -f $appDir)
+          ) -Wait -PassThru
+          if ($setup.ExitCode -ne 0) { throw "Installer exited with code $($setup.ExitCode)" }
+          $app = Start-Process -FilePath "$appDir/CourtMonitorPC.exe" -ArgumentList @(
+            "--self-test", ('--report "{0}"' -f $report)
+          ) -Wait -PassThru
+          $result = Get-Content $report -Raw | ConvertFrom-Json
+          $result | ConvertTo-Json
+          if ($app.ExitCode -ne 0 -or -not $result.ok -or $result.version -ne $env:APP_VERSION -or
+              -not $result.sqlite -or -not $result.windows_encryption -or $result.ocr_digits -ne 6) {
+            throw "Installed Windows app did not pass its self-test"
+          }
+      - uses: actions/upload-artifact@v4
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        with:
+          name: windows-installer
+          path: dist/CourtMonitorPC-Setup.exe
+          if-no-files-found: error
+
   release:
-    needs: docker
+    needs: [identity, docker, windows]
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
@@ -162,11 +229,19 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: nas-app-release
-      - name: Publish verified app update
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-installer
+      - name: Publish verified NAS and Windows updates
         env:
           GH_TOKEN: ${{ github.token }}
+          APP_VERSION: ${{ needs.identity.outputs.version }}
         run: |
           version=$(jq -er .version court-monitor-update.json)
+          test "$version" = "$APP_VERSION"
+          jq -n --arg version "$version" --arg installer CourtMonitorPC-Setup.exe \
+            '{version:$version,installer:$installer}' > court-monitor-windows-update.json
           gh release create "app-v$version" court-monitor-update.json court-monitor-app-linux-amd64.zip \
+            court-monitor-windows-update.json CourtMonitorPC-Setup.exe \
             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest \
-            --title "Court Monitor NAS $version" --generate-notes
+            --title "Court Monitor $version · NAS 및 Windows" --generate-notes

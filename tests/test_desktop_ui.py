@@ -13,13 +13,28 @@ class DesktopUiTests(unittest.TestCase):
         self.folder = tempfile.TemporaryDirectory()
         self.startup = Mock()
         self.startup.enabled.return_value = False
-        self.app = MonitorApp(self.folder.name, start_worker=False, with_tray=False, startup_manager=self.startup)
+        self.app = MonitorApp(self.folder.name, start_worker=False, with_tray=False,
+                              startup_manager=self.startup, check_updates=False)
         self.app.withdraw()
 
     def tearDown(self):
         if not self.app.closing:
             self.app.quit_app()
         self.folder.cleanup()
+
+    def test_update_notice_opens_the_versioned_release(self):
+        from desktop_updates import release_page
+
+        self.app.after_cancel(self.app._drain_job)
+        self.app.events.put(("update", ("1.0.50", False)))
+        self.app._drain()
+        self.assertEqual(self.app.update_banner.winfo_manager(), "pack")
+        self.assertIn("1.0.50", self.app.update_notice.get())
+        with patch("desktop_monitor.webbrowser.open") as open_page:
+            self.app._open_update()
+        open_page.assert_called_once_with(release_page("1.0.50"))
+        self.app._show_update_result(None, False)
+        self.assertFalse(self.app.update_banner.winfo_manager())
 
     def test_preferences_are_in_settings_tab_and_default_off(self):
         self.assertFalse(self.app.auto_start.get())

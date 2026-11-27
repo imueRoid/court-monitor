@@ -12,6 +12,8 @@ Docker 빌드는 [`Dockerfile`](../Dockerfile)에서 Rust 바이너리와 ONNX �
 
 [`desktop_monitor.py`](../desktop_monitor.py)는 설치형 Windows PC 앱의 시작점입니다. 자동 시작과 트레이 동작을 지원합니다. [`build_windows.py`](../build_windows.py)로 실행 파일을 빌드하고 [`installer/windows.iss`](../installer/windows.iss)로 설치 프로그램을 만듭니다. [`WINDOWS-PC.md`](../WINDOWS-PC.md)는 설치 파일에 포함되며 Windows 앱의 안내 열기에서도 사용됩니다.
 
+릴리스 워크플로는 Windows x64에서 설치 파일을 만들고 설치된 앱의 버전, SQLite, Windows 암호화, OCR을 확인합니다. 검증을 마친 설치 파일과 Windows 업데이트 정보를 NAS 패키지와 같은 릴리스에 게시합니다. [배포 워크플로](../.github/workflows/docker-publish.yml)
+
 [`app.py`](../app.py), [`build_exe.py`](../build_exe.py), [`setup.bat`](../setup.bat), [`run.bat`](../run.bat)는 기존 Windows 단일 사건 조회 도구용입니다. `court_client.py`, `case_summary.py`, `captcha_ocr.py` 등 루트의 Python 모듈은 이 도구, Windows 앱, 호환 코드에서 함께 사용합니다. [단일 사건 조회 도구 안내](windows-single-case.md)
 
 [`server/`](../server/)의 Python 서버 코드는 호환 경로와 회귀 검증에 쓰입니다. 일반 Linux Docker 배포는 `compose.yaml`과 `Dockerfile`로 Rust 서버를 빌드합니다. [Linux Docker 빌드 안내](../server/README.md)

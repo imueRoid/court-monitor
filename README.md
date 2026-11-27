@@ -4,7 +4,7 @@
 
 대한민국 법원의 사건 기일과 판결 결과를 조회하는 설치형 프로그램입니다. Synology NAS나 Linux Docker 서버에서 자동 조회를 실행하고 브라우저로 관리합니다. Google Calendar를 연결하면 본인 계정의 사건 전용 캘린더에 기일이 반영됩니다.
 
-[시놀로지 설치 안내](server/SYNOLOGY.md) · [최신 NAS 업데이트](https://github.com/imueRoid/court-monitor/releases/latest) · [Docker Hub 이미지](https://hub.docker.com/r/imueroid/court-monitor)
+[시놀로지 설치 안내](server/SYNOLOGY.md) · [Windows 설치 파일 받기](https://github.com/imueRoid/court-monitor/releases/latest/download/CourtMonitorPC-Setup.exe) · [최신 릴리스](https://github.com/imueRoid/court-monitor/releases/latest) · [Docker Hub 이미지](https://hub.docker.com/r/imueroid/court-monitor)
 
 ## 설치 경로
 
@@ -12,7 +12,7 @@
 | --- | --- |
 | **Synology NAS** | Intel/AMD x86_64 NAS의 Container Manager에서 [시놀로지용 Compose 파일](https://raw.githubusercontent.com/imueRoid/court-monitor/main/compose.synology.yaml)을 프로젝트로 실행합니다. [시놀로지 설치 순서](server/SYNOLOGY.md#설치-순서) |
 | **일반 Linux Docker 서버** | 저장소의 `compose.yaml`로 소스에서 빌드합니다. 기본 포트는 8080입니다. [Linux Docker 서버 안내](server/README.md) |
-| **Windows PC** | Windows 10/11 64비트용 독립 앱입니다. 자동 시작과 트레이 실행을 지원합니다. [Windows 설치 및 빌드 안내](WINDOWS-PC.md) |
+| **Windows PC** | Windows 10/11 x64용 독립 앱입니다. 자동 시작, 트레이 실행, 업데이트 알림을 지원합니다. [Windows 설치 및 빌드 안내](WINDOWS-PC.md) |
 
 Synology에서는 컨테이너가 시작되면 `http://NAS-IP:7708`에 접속해 관리자 비밀번호를 정합니다. 이후 같은 주소를 열어 사건을 등록하거나 기존 Windows 조회 이력 JSON을 가져올 수 있습니다.
 

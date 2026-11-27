@@ -1,6 +1,14 @@
 # 사건 일정 관리 · Windows PC
 
-Windows 10/11 64비트용 독립 앱입니다. 설치 파일 `CourtMonitorPC-Setup-1.0.0.exe`는 아래 **소스로 실행·빌드** 절차에서 만듭니다. 설치한 뒤 시작 메뉴의 **사건 일정 관리 PC**를 엽니다. 빌드된 설치 파일에는 실행에 필요한 구성 요소가 포함되며 개발자 서명은 없습니다.
+Windows 10/11 x64용 독립 앱입니다. 설치 파일을 실행한 뒤 시작 메뉴에서 **사건 일정 관리 PC**를 엽니다. 설치 파일에 실행에 필요한 구성 요소가 모두 포함되어 있습니다. 개발자 서명은 없습니다. [최신 Windows 설치 파일 받기](https://github.com/imueRoid/court-monitor/releases/latest/download/CourtMonitorPC-Setup.exe)
+
+## Windows 앱 업데이트
+
+앱을 시작할 때와 실행 중 6시간마다 새 버전을 확인합니다. **설정 → 업데이트 확인**을 눌러 바로 확인할 수도 있습니다. 새 버전 안내가 뜨면 **설치 파일 받기**를 눌러 해당 버전의 GitHub 릴리스를 엽니다.
+
+`CourtMonitorPC-Setup.exe`를 받은 뒤 기존 앱을 완전히 종료하고 설치 파일을 실행하세요. 트레이에서 실행 중이라면 트레이 아이콘을 우클릭한 뒤 **완전히 종료**를 누릅니다. 기존 PC 데이터 폴더의 사건·예약·설정은 새 버전에서 이어서 사용합니다.
+
+NAS와 Windows 설치 파일은 같은 [GitHub 릴리스](https://github.com/imueRoid/court-monitor/releases/latest)에 게시됩니다.
 
 ## 실행 설정
 
@@ -57,7 +65,7 @@ NAS 웹 화면의 **사건 목록 내보내기**로 받은 JSON 또는 기존 PC
 python -m pip install -r requirements-desktop.txt
 python desktop_monitor.py
 python -m unittest discover -s tests -p 'test_desktop*.py' -v
-python build_windows.py
+python build_windows.py --version 1.0.0
 ```
 
-`build_windows.py`는 OCR 모델을 포함한 `dist/CourtMonitorPC/CourtMonitorPC.exe`를 만듭니다. [Inno Setup](https://jrsoftware.org/isinfo.php)의 `ISCC.exe`로 `installer/windows.iss`를 컴파일하면 설치 EXE를 만들 수 있습니다. 빌드 도구 라이선스는 해당 제작사의 조건을 확인하세요.
+`build_windows.py`는 OCR 모델을 포함한 `dist/CourtMonitorPC/CourtMonitorPC.exe`를 만듭니다. [Inno Setup](https://jrsoftware.org/isinfo.php)의 `ISCC.exe /DAppVersion=1.0.0 installer/windows.iss`를 실행하면 `dist/CourtMonitorPC-Setup.exe`가 생성됩니다. 두 명령에 같은 버전 번호를 사용합니다.

@@ -16,12 +16,13 @@ import re
 from google_auth_oauthlib.flow import InstalledAppFlow
 
 from court_client import CaseNumber, CourtError
+from desktop_updates import installed_version
 from server.config import Settings
 from server.google_oauth import GoogleConnection, OAuthError, SCOPE
 
 
 APP_NAME = "Court Monitor PC"
-VERSION = "1.0.0"
+VERSION = installed_version()
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 RUN_NAME = "CourtMonitorDesktop"
 
