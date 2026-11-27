@@ -2,6 +2,7 @@
 !Dockerfile
 !nas/
 nas/*
+!nas/rust-toolchain.toml
 !nas/Cargo.toml
 !nas/Cargo.lock
 !nas/ocr-assets.requirements

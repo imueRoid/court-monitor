@@ -66,6 +66,8 @@ async fn main() -> Result<()> {
     if mode.as_deref() == Some("--healthcheck") {
         let port: u16 = args.next().unwrap_or_else(|| "8080".into()).parse()?;
         healthcheck(port).await?;
+    } else if mode.as_deref() == Some("--sqlite-version") {
+        println!("{}", rusqlite::version());
     } else if mode.as_deref() == Some("--ocr-smoke") {
         let image = std::fs::read(
             args.next()
