@@ -1,9 +1,12 @@
 FROM rust:1.100.0-slim-bookworm AS nas-build
 
-WORKDIR /build
-COPY nas/rust-toolchain.toml nas/Cargo.toml nas/Cargo.lock ./
-COPY nas/src ./src
-RUN rustc --version && cargo build --locked --release
+RUN --mount=type=bind,source=nas,target=/source \
+    --mount=type=tmpfs,target=/build-output \
+    cd /source \
+    && export CARGO_HOME=/build-output/cargo CARGO_TARGET_DIR=/build-output/target \
+    && rustc --version \
+    && cargo build --locked --release \
+    && cp "$CARGO_TARGET_DIR/release/court-monitor-nas" /court-monitor-nas
 
 FROM python:3.12-slim-bookworm AS ocr-assets
 
@@ -21,7 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && groupadd -g 10001 court && useradd -u 10001 -g court -m court \
     && mkdir -p /data && chown court:court /data
 WORKDIR /app
-COPY --from=nas-build /build/target/release/court-monitor-nas /usr/local/bin/court-monitor-nas
+COPY --from=nas-build /court-monitor-nas /usr/local/bin/court-monitor-nas
 RUN ln -s court-monitor-nas /usr/local/bin/python
 COPY --from=ocr-assets /opt/court-ocr /opt/court-ocr
 COPY server/static ./server/static
