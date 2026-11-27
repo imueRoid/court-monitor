@@ -69,6 +69,17 @@ class DesktopUiTests(unittest.TestCase):
         self.startup.set.assert_called_with(True)
         self.assertEqual(self.app.store.get_meta("desktop_preferences"), {"auto_start":True, "background":False})
 
+    def test_version_appears_beside_the_program_name_in_smaller_type(self):
+        from tkinter.font import Font
+        from desktop_runtime import VERSION
+
+        heading = self.app.winfo_children()[0].winfo_children()[0]
+        title, version = heading.winfo_children()
+        self.assertEqual(title.cget("text"), "사건 일정 관리")
+        self.assertEqual(version.cget("text"), f"v{VERSION}")
+        self.assertLess(Font(root=self.app, font=version.cget("font")).cget("size"),
+                        Font(root=self.app, font=title.cget("font")).cget("size"))
+
     def test_close_hides_only_when_background_enabled_and_tray_available(self):
         self.app.tray = Mock()
         self.app.preferences = {"background":True}

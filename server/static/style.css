@@ -18,6 +18,8 @@
 
 #progress-panel{margin-top:20px;border-top:1px solid #dbe5e0;padding-top:12px}
 .update-banner{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;background:#eef7f0;border-color:#abcdb8}
+.title-version{color:#c4d7db;font-size:.46em;font-weight:500;white-space:nowrap}
+#image-update-guide{color:#68450f;font-weight:600;text-underline-offset:3px}
 .progress-entries{list-style:none;margin:12px 0 0;padding:0}
 .progress-entries li{display:grid;grid-template-columns:100px minmax(0,1fr);gap:6px 14px;border-top:1px solid #e1e8e4;padding:12px 0;white-space:pre-wrap;overflow-wrap:anywhere}
 .progress-entries time{color:#52665d;font-variant-numeric:tabular-nums}

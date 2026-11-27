@@ -91,7 +91,7 @@ function caseBadge(row) {
   return node("span", labels[label], waiting ? "badge wait" : "badge");
 }
 function notice(text,warn=false){$("notice").textContent=text;$("notice").classList.toggle("warn",warn);}
-async function api(path,body){const options={credentials:"same-origin",headers:{}};if(body!==undefined){options.method="POST";options.headers={"Content-Type":"application/json","X-CSRF-Token":state.csrf};options.body=JSON.stringify(body);}const response=await fetch("/api"+path,options);const data=await response.json();if(response.status===401)location.assign("/login");if(!response.ok){let error=data.detail;if(Array.isArray(error))error=error.map(x=>x.msg).join(" / ");throw new Error(typeof error==="string"?error:"서버 요청을 처리하지 못했습니다.");}return data;}
+async function api(path,body){const options={credentials:"same-origin",headers:{}};if(body!==undefined){options.method="POST";options.headers={"Content-Type":"application/json","X-CSRF-Token":state.csrf};options.body=JSON.stringify(body);}const response=await fetch("/api"+path,options);const data=await response.json();if(response.status===401)location.assign("/login");if(!response.ok){let error=data.detail;if(Array.isArray(error))error=error.map(x=>x.msg).join(" / ");throw Object.assign(new Error(typeof error==="string"?error:"서버 요청을 처리하지 못했습니다."),{status:response.status});}return data;}
 async function reloadDiagnostics() {
   const button = $("reload-diagnostics");
   if (button.disabled) return;
@@ -297,4 +297,28 @@ $("import-file").addEventListener("change",async()=>{try{const file=$("import-fi
 $("export").addEventListener("click",async()=>{try{const data=await api("/export");const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:"application/json"}));const link=node("a");link.href=url;link.download="court-cases.json";link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(error){notice(error.message,true);}});
 $("logout").addEventListener("click",async()=>{try{await api("/logout",{});location.assign("/login");}catch(error){notice(error.message,true);}});
 $("password-form").addEventListener("submit",async event=>{event.preventDefault();$("password-message").textContent="";if($("new-password").value!==$("confirm-password").value){$("password-message").textContent="새 비밀번호 확인이 일치하지 않습니다.";return;}$("change-password").disabled=true;try{await api("/password",{current:$("current-password").value,new:$("new-password").value});location.assign("/login?changed=1");}catch(error){$("password-message").textContent=error.message;}finally{$("change-password").disabled=false;}});
-(async()=>{try{const config=await api("/bootstrap");state.config=config;state.csrf=config.csrf_token;setCalendarConfigured(config.calendar_configured);$("diagnostics-card").hidden=!config.diagnostics_available;const build=config.build;$("build-version").textContent=build?("버전 "+build.version+" · "+build.revision.slice(0,7)):"버전 정보 없음";window.dispatchEvent(new CustomEvent("court-ready",{detail:config.google}));state.courts=config.courts;$("session-info").textContent=`이 기기의 로그인 유지 기간: ${config.session_days}일. 암호와 세션은 서버 DB에서 관리합니다.`;await reload();setInterval(()=>reload().catch(error=>notice(error.message,true)),10000);if(!state.courts.length)setTimeout(async()=>{try{state.courts=(await api("/bootstrap")).courts;}catch{}},10000);}catch(error){notice(error.message,true);}})();
+window.addEventListener("DOMContentLoaded", async () => {
+  try {
+    const config = await api("/bootstrap");
+    state.config = config;
+    state.csrf = config.csrf_token;
+    setCalendarConfigured(config.calendar_configured);
+    $("diagnostics-card").hidden = !config.diagnostics_available;
+    const version = $("build-version");
+    if (config.build?.version) {
+      version.textContent = `v${config.build.version}`;
+      if (config.build.revision) version.title = `빌드 ${config.build.revision.slice(0, 7)}`;
+      version.hidden = false;
+    }
+    window.dispatchEvent(new CustomEvent("court-ready", {detail: config.google}));
+    state.courts = config.courts;
+    $("session-info").textContent = `이 기기의 로그인 유지 기간: ${config.session_days}일. 암호와 세션은 서버 DB에서 관리합니다.`;
+    await reload();
+    setInterval(() => reload().catch(error => notice(error.message, true)), 10_000);
+    if (!state.courts.length) setTimeout(async () => {
+      try { state.courts = (await api("/bootstrap")).courts; } catch {}
+    }, 10_000);
+  } catch (error) {
+    notice(error.message, true);
+  }
+}, {once: true});

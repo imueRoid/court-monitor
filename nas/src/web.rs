@@ -122,14 +122,18 @@ async fn check(State(app): State<Arc<App>>) -> Response {
             match app.updates.latest().await {
                 Ok(latest) => *cache = Some((Instant::now(), latest)),
                 Err(_) => {
-                    return private(
-                        Json(Status {
-                            current: &app.installed,
-                            latest: None,
-                            status: "unavailable",
-                        })
-                        .into_response(),
-                    )
+                    if let Some((checked, Some(_))) = cache.as_mut() {
+                        *checked = Instant::now();
+                    } else {
+                        return private(
+                            Json(Status {
+                                current: &app.installed,
+                                latest: None,
+                                status: "unavailable",
+                            })
+                            .into_response(),
+                        );
+                    }
                 }
             }
         }
@@ -176,20 +180,8 @@ async fn apply(State(app): State<Arc<App>>, Json(payload): Json<Apply>) -> Respo
             "현재 업데이트를 적용할 수 없습니다. 잠시 후 다시 시도하세요.",
         );
     }
-    let release = match app.updates.latest().await {
-        Ok(Some(release))
-            if release.version == payload.version
-                && version(&release.version) > version(&app.installed)
-                && release.runtime == app.updates.runtime =>
-        {
-            release
-        }
-        Ok(_) => {
-            return error(
-                StatusCode::CONFLICT,
-                "업데이트 상태가 바뀌었습니다. 화면을 새로고침하세요.",
-            )
-        }
+    let latest = match app.updates.latest().await {
+        Ok(latest) => latest,
         Err(_) => {
             return error(
                 StatusCode::BAD_GATEWAY,
@@ -197,6 +189,23 @@ async fn apply(State(app): State<Arc<App>>, Json(payload): Json<Apply>) -> Respo
             )
         }
     };
+    *app.release_cache.lock().await = Some((Instant::now(), latest.clone()));
+    let Some(release) = latest.filter(|release| version(&release.version) > version(&app.installed))
+    else {
+        return error(StatusCode::CONFLICT, "현재 적용할 새 버전이 없습니다.");
+    };
+    if release.runtime != app.updates.runtime {
+        return error(
+            StatusCode::CONFLICT,
+            "Docker 이미지 업데이트가 필요합니다. 기존 프로젝트에서 새 이미지를 받아 컨테이너를 재생성하세요.",
+        );
+    }
+    if release.version != payload.version {
+        return error(
+            StatusCode::CONFLICT,
+            "업데이트 상태가 바뀌었습니다. 새 버전을 다시 확인하세요.",
+        );
+    }
     if let Err(err) = app.updates.stage(&release).await {
         eprintln!("Could not stage release {}: {err:#}", release.version);
         return error(

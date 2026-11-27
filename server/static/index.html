@@ -8,12 +8,13 @@
   <script src="/static/google.js" defer></script>
 </head>
 <body>
-  <header><div><span class="eyebrow">COURT MONITOR</span><h1>사건 일정 관리</h1><p>기일을 확인하고, 전용 캘린더에 최신 결과를 반영합니다.</p></div>
+  <header><div><span class="eyebrow">COURT MONITOR</span><h1>사건 일정 관리 <small id="build-version" class="title-version" hidden></small></h1><p>기일을 확인하고, 전용 캘린더에 최신 결과를 반영합니다.</p></div>
     <div class="header-actions"><a href="https://calendar.google.com/" target="_blank" rel="noreferrer">Google Calendar 열기 ↗</a><button id="logout" class="secondary">로그아웃</button></div></header>
   <main>
-    <section id="update-banner" class="notice update-banner" aria-label="앱 업데이트" hidden>
+    <section id="update-banner" class="notice update-banner" aria-label="업데이트 알림" hidden>
       <span id="update-message" role="status"></span>
       <button id="apply-update" type="button" hidden>업데이트 적용</button>
+      <a id="image-update-guide" href="https://github.com/imueRoid/court-monitor/blob/main/server/SYNOLOGY.md#docker-실행-환경이-바뀌었을-때" target="_blank" rel="noreferrer" hidden>Docker 이미지 업데이트 방법 ↗</a>
     </section>
     <div id="dashboard-tabs" class="dashboard-tabs" role="tablist" aria-label="사건 일정 관리">
       <button id="dashboard-tab" type="button" role="tab" aria-selected="true" aria-controls="dashboard-panel">사건 관리</button>
@@ -63,5 +64,5 @@
         <pre id="diagnostics-log" tabindex="0" aria-label="서버 진단 로그" hidden></pre>
       </details></section>
     </section>
-  </main><footer><span id="build-version">버전 확인 중</span> · 사건정보의 변경과 법원 사이트의 반영 시점에 따라 동기화 결과가 달라질 수 있습니다.</footer>
+  </main><footer>사건정보의 변경과 법원 사이트의 반영 시점에 따라 동기화 결과가 달라질 수 있습니다.</footer>
 </body></html>
