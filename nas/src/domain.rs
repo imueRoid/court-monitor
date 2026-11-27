@@ -18,16 +18,28 @@ pub fn terminal_result(text: &str) -> Option<&str> {
 }
 
 pub fn has_order(text: &str) -> bool {
-    ![
-        "",
-        UNKNOWN,
-        "판결선고",
-        "미확인",
-        "종국",
-        "예정",
-        "판결선고 예정",
-    ]
-    .contains(&terminal_result(text).unwrap_or(text).trim())
+    !no_hearing_judgment_cancelled(text)
+        && ![
+            "",
+            UNKNOWN,
+            "판결선고",
+            "미확인",
+            "종국",
+            "예정",
+            "판결선고 예정",
+        ]
+        .contains(&terminal_result(text).unwrap_or(text).trim())
+}
+
+pub fn no_hearing_judgment_cancelled(text: &str) -> bool {
+    static MARKER: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r"^(?:(?:판결\s*선고(?:\s*기일)?|선고\s*기일)[\s:：(（].*?)?[\s(（\[]*무\s*변론\s*판결\s*취소\s*(?:됨)?[\s.)）\]]*$").unwrap()
+    });
+    MARKER.is_match(terminal_result(text).unwrap_or(text).trim())
+}
+
+pub fn hearing_result_cancelled(text: &str) -> bool {
+    no_hearing_judgment_cancelled(text) || terminal_result(text).is_none() && cancelled(text)
 }
 
 #[derive(Clone, Default, Serialize, Deserialize, Debug, PartialEq, Eq)]
@@ -173,11 +185,14 @@ impl Observation {
     }
 
     pub fn retain_judgment(&mut self, previous: &Self) {
-        if !previous.order() {
+        if !previous.order() || no_hearing_judgment_cancelled(self.text("판결 주문")) {
             return;
         }
         let old_day = day(previous.text("선고일자"));
         let new_day = day(self.text("선고일자"));
+        if old_day.is_empty() && !self.order() && !self.cancelled_verdict_days.is_empty() {
+            return;
+        }
         if !old_day.is_empty()
             && ((!new_day.is_empty() && new_day != old_day)
                 || self.cancelled_verdict_days.contains(&old_day)
@@ -209,8 +224,11 @@ impl Observation {
 
     pub fn normalize(&mut self) {
         self.hearings.retain(|h| !day(&h.day).is_empty());
+        for at in self.no_hearing_cancellation_days() {
+            self.cancel_no_hearing_verdict(at);
+        }
         for hearing in &self.hearings {
-            if terminal_result(&hearing.result).is_none() && cancelled(&hearing.result) {
+            if hearing_result_cancelled(&hearing.result) {
                 self.cancelled_hearings.insert(Cancelled {
                     day: hearing.day.clone(),
                     kind: hearing.kind.clone(),
@@ -253,7 +271,13 @@ impl Observation {
                 self.summary.insert("선고일자".into(), UNKNOWN.into());
             }
             if matches!(self.case_category.as_str(), "민사" | "행정") {
-                if let Some((at, result)) = self.reported_terminal_result(continued) {
+                let cancelled_at = self
+                    .cancelled_verdict_days
+                    .last()
+                    .map_or("", String::as_str);
+                if let Some((at, result)) =
+                    self.reported_terminal_result(continued.max(cancelled_at))
+                {
                     let at = at.replace('-', ".");
                     let result = result.to_owned();
                     self.summary.insert("판결 주문".into(), result);
@@ -267,7 +291,54 @@ impl Observation {
             .sort_by(|a, b| (&a.day, &a.clock, &a.kind).cmp(&(&b.day, &b.clock, &b.kind)));
     }
 
-    fn reported_terminal_result(&self, latest_trial: &str) -> Option<(&str, &str)> {
+    pub fn has_no_hearing_judgment_cancellation(&self) -> bool {
+        no_hearing_judgment_cancelled(self.text("판결 주문"))
+            || !self.no_hearing_cancellation_days().is_empty()
+    }
+
+    fn no_hearing_cancellation_days(&self) -> BTreeSet<String> {
+        let mut days: BTreeSet<_> = self
+            .hearings
+            .iter()
+            .filter(|h| h.kind == "선고" && no_hearing_judgment_cancelled(&h.result))
+            .map(|h| day(&h.day))
+            .chain(
+                self.progress
+                    .iter()
+                    .flatten()
+                    .filter(|row| {
+                        no_hearing_judgment_cancelled(&row.result)
+                            || no_hearing_judgment_cancelled(&row.content)
+                                && !["신청", "통지서", "제출", "접수"]
+                                    .iter()
+                                    .any(|word| row.content.contains(word))
+                    })
+                    .map(|row| day(&row.day)),
+            )
+            .filter(|at| !at.is_empty())
+            .collect();
+        if no_hearing_judgment_cancelled(self.text("판결 주문")) {
+            let reported = day(self.text("선고일자"));
+            if !reported.is_empty() {
+                days.insert(reported);
+            }
+        }
+        days
+    }
+
+    pub fn cancel_no_hearing_verdict(&mut self, at: String) {
+        if at == day(self.text("선고일자")) {
+            self.summary.insert("판결 주문".into(), UNKNOWN.into());
+            self.summary.insert("선고일자".into(), UNKNOWN.into());
+        }
+        self.cancelled_hearings.insert(Cancelled {
+            day: at.clone(),
+            kind: "선고".into(),
+        });
+        self.cancelled_verdict_days.insert(at);
+    }
+
+    fn reported_terminal_result(&self, earliest: &str) -> Option<(&str, &str)> {
         let today = Utc::now()
             .with_timezone(&chrono_tz::Asia::Seoul)
             .date_naive()
@@ -279,7 +350,7 @@ impl Observation {
             .map(|h| h.day.as_str())
             .max()
             .unwrap_or("");
-        let active_since = latest_trial.max(latest_verdict);
+        let active_since = earliest.max(latest_verdict);
         let hearings = self
             .hearings
             .iter()
@@ -296,8 +367,8 @@ impl Observation {
                     && *at <= &today
                     && !self.cancelled_verdict_days.contains(*at)
                     && ![result, content].iter().any(|text| {
-                        terminal_result(text).is_none()
-                            && (cancelled(text) || text.contains("예정"))
+                        hearing_result_cancelled(text)
+                            || terminal_result(text).is_none() && text.contains("예정")
                     })
             })
             .filter_map(|(at, result, content)| {
@@ -330,7 +401,10 @@ impl Observation {
                 .hearings
                 .iter()
                 .any(|h| trial(h) && h.day.as_str() > remembered);
-        if resumed || self.cancelled_verdict_days.contains(remembered) {
+        if resumed
+            || self.cancelled_verdict_days.contains(remembered)
+            || no_hearing_judgment_cancelled(self.text("판결 주문"))
+        {
             return String::new();
         }
         remembered.to_owned()
