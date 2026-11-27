@@ -27,7 +27,7 @@ WORKDIR /app
 COPY --from=nas-build /court-monitor-nas /usr/local/bin/court-monitor-nas
 RUN ln -s court-monitor-nas /usr/local/bin/python
 COPY --from=ocr-assets /opt/court-ocr /opt/court-ocr
-COPY server/static ./server/static
+COPY --chmod=u=rwX,go=rX server/static ./server/static
 ARG APP_VERSION=development
 ARG VCS_REF=unknown
 ARG BUILD_DATE=unknown
