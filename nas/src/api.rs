@@ -1,6 +1,7 @@
 use crate::{
     auth::{token, Login},
     court,
+    diagnostics::{console, error_kind},
     google::CALLBACK,
     store::{CaseInput, CaseScope, Store},
     web::{error, same_origin, App},
@@ -30,7 +31,7 @@ impl IntoResponse for Failure {
 
 impl From<anyhow::Error> for Failure {
     fn from(err: anyhow::Error) -> Self {
-        eprintln!("서버 데이터 처리 오류: {err:#}");
+        console(format!("서버 데이터 처리 오류: {}\n", error_kind(&err)));
         fail(
             StatusCode::INTERNAL_SERVER_ERROR,
             "서버의 데이터를 처리하지 못했습니다.",
@@ -138,10 +139,15 @@ pub fn protected() -> Router<Arc<App>> {
         .route(CALLBACK, get(google_callback))
 }
 
-async fn health(State(app): State<Arc<App>>) -> Json<Value> {
+async fn health(State(app): State<Arc<App>>) -> (StatusCode, Json<Value>) {
     let mut build = app.build.clone();
-    build["status"] = json!("ok");
-    Json(build)
+    let (code, status) = if app.database_healthy() {
+        (StatusCode::OK, "ok")
+    } else {
+        (StatusCode::SERVICE_UNAVAILABLE, "database_unavailable")
+    };
+    build["status"] = json!(status);
+    (code, Json(build))
 }
 
 async fn page_html(name: &str) -> Response {

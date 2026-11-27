@@ -41,12 +41,42 @@ pub struct App {
     pub google: Arc<Google>,
     pub journal: Journal,
     pub build: Value,
+    database_health: watch::Receiver<(Instant, bool)>,
     updates: Updates,
     installed: String,
     release_cache: Mutex<Option<(Instant, Option<Release>)>>,
     staging: Mutex<()>,
     restart: watch::Sender<bool>,
     accepted: PathBuf,
+}
+
+impl App {
+    pub fn database_healthy(&self) -> bool {
+        let (checked, healthy) = *self.database_health.borrow();
+        healthy && checked.elapsed() < Duration::from_secs(6)
+    }
+}
+
+async fn monitor_database(store: Store, health: watch::Sender<(Instant, bool)>, journal: Journal) {
+    let mut was_healthy = true;
+    loop {
+        let store = store.clone();
+        let result = tokio::task::spawn_blocking(move || store.health_check())
+            .await
+            .map_err(anyhow::Error::from)
+            .and_then(|result| result);
+        let healthy = result.is_ok();
+        health.send_replace((Instant::now(), healthy));
+        if healthy != was_healthy {
+            let message = match result {
+                Ok(()) => "Database health recovered".into(),
+                Err(error) => format!("Database health check failed: {}", error_kind(&error)),
+            };
+            journal.record(Source::Server, message);
+            was_healthy = healthy;
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
 }
 
 pub fn error(code: StatusCode, detail: &str) -> Response {
@@ -190,7 +220,8 @@ async fn apply(State(app): State<Arc<App>>, Json(payload): Json<Apply>) -> Respo
         }
     };
     *app.release_cache.lock().await = Some((Instant::now(), latest.clone()));
-    let Some(release) = latest.filter(|release| version(&release.version) > version(&app.installed))
+    let Some(release) =
+        latest.filter(|release| version(&release.version) > version(&app.installed))
     else {
         return error(StatusCode::CONFLICT, "현재 적용할 새 버전이 없습니다.");
     };
@@ -207,7 +238,14 @@ async fn apply(State(app): State<Arc<App>>, Json(payload): Json<Apply>) -> Respo
         );
     }
     if let Err(err) = app.updates.stage(&release).await {
-        eprintln!("Could not stage release {}: {err:#}", release.version);
+        app.journal.record(
+            Source::Server,
+            format!(
+                "Could not stage release {}: {}",
+                release.version,
+                error_kind(&err)
+            ),
+        );
         return error(
             StatusCode::BAD_GATEWAY,
             "업데이트 파일을 내려받거나 검증하지 못했습니다.",
@@ -234,6 +272,7 @@ pub async fn run(directory: &Path, listen: Listen, journal: &Journal) -> Result<
     store.resume_no_hearing_cancelled_cases(crate::store::now(), &settings)?;
     let auth = Arc::new(Auth::new(store.clone(), &settings)?);
     let google = Arc::new(Google::new(store.clone(), settings.clone())?);
+    let (database_health, last_database_check) = watch::channel((Instant::now(), true));
     tokio::fs::metadata("server/static/index.html")
         .await
         .context("application assets missing")?;
@@ -243,6 +282,7 @@ pub async fn run(directory: &Path, listen: Listen, journal: &Journal) -> Result<
         auth,
         google: google.clone(),
         journal: journal.clone(),
+        database_health: last_database_check,
         build: json!({"version":installed,
            "revision":env::var("COURT_MONITOR_REVISION").unwrap_or_else(|_|"unknown".into()),
            "created":env::var("COURT_MONITOR_CREATED").unwrap_or_default()}),
@@ -275,6 +315,11 @@ pub async fn run(directory: &Path, listen: Listen, journal: &Journal) -> Result<
         .await
     });
     tokio::fs::write(directory.join("ready"), b"").await?;
+    let database = tokio::spawn(monitor_database(
+        store.clone(),
+        database_health,
+        journal.clone(),
+    ));
     let mut court = tokio::spawn(worker::court(store, settings, journal.clone()));
     let mut calendar = tokio::spawn(worker::calendar(google, journal.clone()));
     let mut restart = false;
@@ -290,6 +335,7 @@ pub async fn run(directory: &Path, listen: Listen, journal: &Journal) -> Result<
         _=interrupt.recv()=>Ok(()),
         _=requested.changed()=>{restart=*requested.borrow(); Ok(())},
     };
+    database.abort();
     court.abort();
     calendar.abort();
     if !server.is_finished() {

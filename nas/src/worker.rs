@@ -3,7 +3,6 @@ use crate::{
     court::Court,
     diagnostics::{error_kind, Journal, Source},
     google::Google,
-    ocr::Ocr,
     store::{now, Store},
 };
 use anyhow::Result;
@@ -17,7 +16,6 @@ struct Worker {
     store: Store,
     settings: Arc<Settings>,
     client: Option<Court>,
-    reader: Ocr,
     last_request: f64,
 }
 
@@ -51,16 +49,10 @@ impl Worker {
             return Ok(());
         };
         self.last_request = at;
-        let mut reader = std::mem::take(&mut self.reader);
         let result = match self.client().await {
-            Ok(client) => {
-                client
-                    .lookup(&job.court, &job.number, &job.party, &mut reader)
-                    .await
-            }
+            Ok(client) => client.lookup(&job.court, &job.number, &job.party).await,
             Err(err) => Err(err),
         };
-        self.reader = reader;
         if result.is_err() {
             self.client = None;
         }
@@ -74,19 +66,15 @@ impl Worker {
     }
 }
 
-async fn report(
-    journal: &Journal,
-    operation: &str,
-    error: &anyhow::Error,
-    last: &mut Option<Instant>,
-) {
+fn report(journal: &Journal, operation: &str, error: &anyhow::Error, last: &mut Option<Instant>) {
     if last.is_some_and(|at| at.elapsed() < Duration::from_secs(60)) {
         return;
     }
     *last = Some(Instant::now());
-    let journal = journal.clone();
-    let message = format!("{operation}: {}", error_kind(error));
-    let _ = spawn_blocking(move || journal.record(Source::Server, message)).await;
+    journal.record(
+        Source::Server,
+        format_args!("{operation}: {}", error_kind(error)),
+    );
 }
 
 pub async fn court(store: Store, settings: Arc<Settings>, journal: Journal) {
@@ -94,25 +82,21 @@ pub async fn court(store: Store, settings: Arc<Settings>, journal: Journal) {
         store,
         settings,
         client: None,
-        reader: Ocr::default(),
         last_request: 0.0,
     };
     let mut last_error = None;
     if let Err(error) = jobs.client().await {
-        eprintln!("법원 목록을 불러오지 못했습니다. 사건 조회 시 다시 시도합니다.");
         report(
             &journal,
             "Court directory could not be loaded",
             &error,
             &mut last_error,
-        )
-        .await;
+        );
         last_error = None;
     }
     loop {
         if let Err(error) = jobs.tick().await {
-            eprintln!("사건 조회 작업 오류: {error:#}");
-            report(&journal, "Court worker error", &error, &mut last_error).await;
+            report(&journal, "Court worker error", &error, &mut last_error);
         }
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
@@ -122,8 +106,7 @@ pub async fn calendar(google: Arc<Google>, journal: Journal) {
     let mut last_error = None;
     loop {
         if let Err(error) = google.sync_one().await {
-            eprintln!("캘린더 작업 오류: {error:#}");
-            report(&journal, "Calendar worker error", &error, &mut last_error).await;
+            report(&journal, "Calendar worker error", &error, &mut last_error);
         }
         tokio::time::sleep(Duration::from_secs(2)).await;
     }

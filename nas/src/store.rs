@@ -8,8 +8,8 @@ use chrono::Timelike;
 use chrono_tz::Tz;
 use ring::rand::{SecureRandom, SystemRandom};
 use rusqlite::{
-    functions::FunctionFlags, params, params_from_iter, Connection, OptionalExtension, Row,
-    TransactionBehavior,
+    functions::FunctionFlags, params, params_from_iter, Connection, OpenFlags, OptionalExtension,
+    Row, TransactionBehavior,
 };
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::{json, Value};
@@ -137,6 +137,13 @@ impl Store {
         db.busy_timeout(Duration::from_secs(15))?;
         db.pragma_update(None, "foreign_keys", true)?;
         Ok(db)
+    }
+
+    pub fn health_check(&self) -> Result<()> {
+        let db = Connection::open_with_flags(&self.path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        db.busy_timeout(Duration::from_millis(250))?;
+        meta::<String>(&db, "admin_password_hash")?;
+        Ok(())
     }
 
     pub fn write<T>(&self, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {

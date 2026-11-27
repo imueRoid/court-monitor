@@ -26,8 +26,14 @@ BINARY = os.environ.get("COURT_MONITOR_NAS_BINARY")
 class NativeNasTests(unittest.TestCase):
     def test_legacy_command_session_pending_update_and_rollback(self):
         with tempfile.TemporaryDirectory() as directory:
-            data = Path(directory)
+            fixture = Path(directory)
+            data = fixture / "data"
+            data.mkdir()
             database = data / "cases.sqlite3"
+            mounted = fixture / "mounted"
+            mounted.symlink_to(data, target_is_directory=True)
+            unavailable = fixture / "unavailable"
+            (unavailable / database.name).mkdir(parents=True)
             store = Store(database)
             key = store.add_case("가상법원", "2024구합1", "가상당사자")
             store.set_active(key, False)
@@ -44,7 +50,7 @@ class NativeNasTests(unittest.TestCase):
             environment = {
                 **os.environ,
                 "COURT_MONITOR_VERSION": "1.0.1", "COURT_MONITOR_RUNTIME": runtime,
-                "COURT_AUTO_UPDATE": "false", "DATABASE_PATH": str(database),
+                "COURT_AUTO_UPDATE": "false", "DATABASE_PATH": str(mounted / database.name),
                 "TOKIO_WORKER_THREADS": "1",
                 "HTTPS_PROXY": "http://127.0.0.1:1", "https_proxy": "http://127.0.0.1:1",
                 "NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1",
@@ -52,6 +58,19 @@ class NativeNasTests(unittest.TestCase):
             session = requests.Session()
             session.trust_env = False
             session.cookies.set("court_session", legacy_session, domain="127.0.0.1", path="/")
+
+            def point_database_at(target):
+                replacement = fixture / "replacement"
+                replacement.symlink_to(target, target_is_directory=True)
+                replacement.replace(mounted)
+
+            def wait_health(expected_status):
+                for _ in range(25):
+                    response = session.get(base + "/health", timeout=1)
+                    if response.status_code == expected_status:
+                        return response.json()
+                    time.sleep(0.25)
+                self.fail(f"Expected /health {expected_status}, received {response.status_code}")
 
             def start(expected_version, create=None):
                 binary = str(Path(BINARY).resolve())
@@ -133,6 +152,14 @@ class NativeNasTests(unittest.TestCase):
                     time.sleep(2.3)
                     self.assertEqual(session.get(base + "/health", timeout=1).status_code, 200)
                     connection.rollback()
+
+                point_database_at(unavailable)
+                try:
+                    self.assertEqual(wait_health(503)["status"], "database_unavailable")
+                    self.assertEqual(session.get(base + "/static/update.js", timeout=1).status_code, 200)
+                finally:
+                    point_database_at(data)
+                self.assertEqual(wait_health(200)["status"], "ok")
 
             def diagnostics_after_rollback():
                 response = session.get(base + "/api/diagnostics", timeout=2)
