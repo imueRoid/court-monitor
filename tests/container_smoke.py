@@ -61,6 +61,8 @@ def main():
         wait_healthy(name)
         docker("exec", name, *LEGACY_HEALTH)
         docker("exec", name, "court-monitor-nas", "--healthcheck", "7708")
+        sqlite = docker("exec", name, "court-monitor-nas", "--sqlite-version").stdout.strip()
+        assert tuple(map(int, sqlite.split("."))) >= (3, 54, 1), sqlite
         base = f"http://127.0.0.1:{port}"
         health = requests.get(base + "/health", timeout=5).json()
         expected = os.environ["EXPECTED_VERSION"]

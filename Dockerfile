@@ -3,7 +3,7 @@ FROM rust:1.100-slim-bookworm AS nas-build
 WORKDIR /build
 COPY nas/Cargo.toml nas/Cargo.lock ./
 COPY nas/src ./src
-RUN cargo build --locked --release
+RUN rustc --version && cargo build --locked --release
 
 FROM python:3.12-slim-bookworm AS ocr-assets
 
