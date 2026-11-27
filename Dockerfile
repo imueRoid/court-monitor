@@ -26,7 +26,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 WORKDIR /app
 COPY --from=nas-build /court-monitor-nas /usr/local/bin/court-monitor-nas
 RUN ln -s court-monitor-nas /usr/local/bin/python
-COPY --from=ocr-assets /opt/court-ocr /opt/court-ocr
+COPY --from=ocr-assets --chmod=u=rwX,go=rX /opt/court-ocr /opt/court-ocr
 COPY --chmod=u=rwX,go=rX server/static ./server/static
 ARG APP_VERSION=development
 ARG VCS_REF=unknown

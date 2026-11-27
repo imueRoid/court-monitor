@@ -91,7 +91,7 @@ def main():
         image.save(stream, format="PNG")
         ocr = subprocess.run(["docker", "exec", "-i", name, "/bin/sh", "-c",
             "cat >/tmp/ocr-test.png && court-monitor-nas --ocr-smoke /tmp/ocr-test.png"],
-            input=stream.getvalue(), capture_output=True, check=True)
+            input=stream.getvalue(), capture_output=True, check=True, timeout=30)
         assert ocr.stdout.decode().strip() == "123456", ocr
         assert docker("exec", name, "python", "-c", "print(1)", check=False).returncode != 0
         docker("exec", name, "/bin/sh", "-c", "! command -v python3")
