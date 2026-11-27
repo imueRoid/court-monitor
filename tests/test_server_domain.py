@@ -101,6 +101,21 @@ class DomainTests(unittest.TestCase):
                 self.assertEqual(calendar_hearings(data, moment(), "Asia/Seoul"), [])
                 self.assertEqual(data["progress"][0]["day"], "2026-11-24")
 
+    def test_no_hearing_cancellation_supersedes_older_scheduled_verdict_without_next_hearing(self):
+        result = {"general": {"data": {
+            "dma_csBasCtt": {"jdgmnPrnYmd": "20261120", "jdgmnOrdCtt": "원고승"},
+            "dlt_rcntDxdyLst": [
+                {"dxdyYmd": "20261120", "dxdyKndNm": "판결선고기일"},
+                {"dxdyYmd": "20261124", "dxdyKndNm": "판결선고기일", "dxdyRsltNm": "무변론판결취소"},
+            ],
+        }}}
+        data = snapshot(result)
+        self.assertEqual(data["no_hearing_cancelled_through"], "2026-11-24")
+        self.assertFalse(has_verdict_date(data))
+        self.assertIsNone(next_hearing(data, moment(), "Asia/Seoul"))
+        plan = schedule(Settings(), moment(), data, {"verdict_day": "2026-11-20"})
+        self.assertEqual((plan["state"], plan["verdict_day"]), ("monitoring", ""))
+
     def test_later_trial_supersedes_old_verdict_but_keeps_new_verdict(self):
         data = observed()
         data["hearings"].append({"day": "2026-11-26", "clock": "14:00", "kind": "공판"})

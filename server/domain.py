@@ -12,6 +12,21 @@ from .case_identity import case_identity
 
 
 UNKNOWN = {"", "확인되지 않음", "판결선고", "미확인"}
+NO_HEARING_CANCELLATION = re.compile(
+    r"(?:(?:판결\s*선고(?:\s*기일)?|선고\s*기일)[\s:：(（].*?)?"
+    r"[\s(（\[]*무\s*변론\s*판결\s*취소\s*(?:됨)?[\s.)）\]]*"
+)
+HEARING_ENTRY = re.compile(
+    r"\s*(판결\s*선고(?:\s*기일)?|(?:선고|변론준비|변론|공판준비|공판|조정|심문|심리|화해)기일)(?:\s|\(|$)"
+)
+
+
+def no_hearing_judgment_cancelled(value):
+    if not isinstance(value, str) or "무" not in value:
+        return False
+    text = value.strip()
+    prefix = re.match(r"종국(?:결과)?\s*[:：]\s*", text)
+    return bool(NO_HEARING_CANCELLATION.fullmatch(text[prefix.end():] if prefix else text))
 
 
 @dataclass
@@ -56,7 +71,7 @@ def hearing_kind(value):
     return text.strip() or "기일"
 
 
-def extract_hearings(result, *, cancelled=None):
+def extract_hearings(result, *, cancelled=None, no_hearing_cancelled=None):
     data = result.get("general", {}).get("data", {})
     hearings = {}
     cancelled = set() if cancelled is None else cancelled
@@ -68,6 +83,8 @@ def extract_hearings(result, *, cancelled=None):
         outcome = display_text(row.get("dxdyRsltNm"))
         if re.search(r"변경|취소|연기", outcome):
             cancelled.add((day, kind))
+            if no_hearing_cancelled is not None and kind == "선고" and no_hearing_judgment_cancelled(outcome):
+                no_hearing_cancelled.add(day)
             continue
         item = Hearing(day, clean_clock(row.get("dxdyHm")), kind,
                        display_text(row.get("dxdyPlcNm")), outcome)
@@ -78,7 +95,7 @@ def extract_hearings(result, *, cancelled=None):
     for row in progress:
         text = " ".join(display_text(row.get(k)) for k in ("progCtt", "progCtt1", "progCtt2", "progCtt3", "progDts"))
         # 송달·서류 접수를 기일로 오인하지 않는다.
-        match = re.match(r"\s*(판결선고|(?:선고|변론준비|변론|공판준비|공판|조정|심문|심리|화해)기일)(?:\s|\(|$)", text)
+        match = HEARING_ENTRY.match(text)
         day = clean_day(row.get("progYmd"))
         if not match or not day:
             continue
@@ -114,6 +131,8 @@ def extract_progress(result):
             parts = [text(row.get(key)) for key in ("progCtt1", "progCtt2", "progCtt3", "progDts")]
             content = " ".join(dict.fromkeys(part for part in parts if part))
         outcome = text(row.get("progRslt"))
+        outcome = next((marker for key in ("progCtt1", "progCtt2", "progCtt3", "progDts")
+                        if no_hearing_judgment_cancelled(marker := text(row.get(key)))), outcome)
         if day and (content or outcome):
             item = {"day": day, "content": content, "result": outcome}
             found.setdefault((day, content, outcome), item)
@@ -125,24 +144,40 @@ def normalize_observed(observed):
     cancelled = {(row["day"], row["kind"]) for row in observed.get("cancelled_hearings", [])}
     hearings = [Hearing(**row) for row in observed.get("hearings", [])]
     cancelled.update((h.day, h.kind) for h in hearings if re.search(r"변경|취소|연기", h.result))
+    actual = clean_day(summary.get("선고일자"))
+    no_hearing_through = max(
+        observed.get("no_hearing_cancelled_through", ""),
+        max((h.day for h in hearings if h.kind == "선고" and no_hearing_judgment_cancelled(h.result)), default=""),
+        max((row["day"] for row in observed.get("progress", []) or []
+             if no_hearing_judgment_cancelled(row.get("result"))
+             or (no_hearing_judgment_cancelled(row.get("content"))
+                 and not re.search(r"신청|통지서|제출|접수", row.get("content", "")))), default=""),
+        actual if no_hearing_judgment_cancelled(summary.get("판결 주문")) else "",
+    )
+    if no_hearing_through:
+        cancelled.add((no_hearing_through, "선고"))
+        if actual <= no_hearing_through:
+            summary["판결 주문"] = summary["선고일자"] = "확인되지 않음"
     excluded = set(observed.get("cancelled_verdict_days", []))
     excluded.update(day for day, kind in cancelled if kind == "선고")
     valid = [h for h in hearings if (h.day, h.kind) not in cancelled]
     # A resumed trial after an old verdict date supersedes that scheduled verdict.
     continued = max((h.day for h in valid if h.kind in
                      {"공판", "공판준비", "변론", "변론준비", "심리", "심문"}), default="")
-    actual = clean_day(summary.get("선고일자"))
-    if not has_order(summary):
+    order = has_order(summary)
+    if not order:
         excluded.update(h.day for h in valid if h.kind == "선고" and h.day < continued)
         if actual and actual < continued:
             excluded.add(actual)
-        if actual in excluded:
+        if actual and actual <= max(excluded, default=""):
             summary["선고일자"] = "확인되지 않음"
     else:
         # Confirmed judgment contents take precedence over historical schedule changes.
         excluded.discard(actual)
-    valid = [h for h in valid if h.kind != "선고" or h.day not in excluded]
-    return {**observed, "summary": summary, "hearings": [asdict(h) for h in valid],
+    cutoff = max(excluded, default="")
+    valid = [h for h in valid if h.kind != "선고" or h.day > cutoff or order and h.day == actual]
+    return {**observed, **({"no_hearing_cancelled_through": no_hearing_through} if no_hearing_through else {}),
+            "summary": summary, "hearings": [asdict(h) for h in valid],
             "cancelled_hearings": [{"day": day, "kind": kind} for day, kind in sorted(cancelled)],
             "cancelled_verdict_days": sorted(excluded)}
 
@@ -175,15 +210,21 @@ def progress_interval(observed, now, timezone):
 def snapshot(result):
     summary = summarize_case(result)
     cancelled = set()
-    hearings = extract_hearings(result, cancelled=cancelled)
+    no_hearing_cancelled = set()
+    hearings = extract_hearings(result, cancelled=cancelled, no_hearing_cancelled=no_hearing_cancelled)
+    basic = result.get("general", {}).get("data", {}).get("dma_csBasCtt") or {}
+    if no_hearing_judgment_cancelled(display_text(basic.get("csUltmtDvsNm"))):
+        no_hearing_cancelled.add(clean_day(basic.get("csUltmtYmd")))
     return normalize_observed({"summary": summary, "hearings": [asdict(h) for h in hearings],
             "cancelled_hearings": [{"day": day, "kind": kind} for day, kind in sorted(cancelled)],
+            "no_hearing_cancelled_through": max(no_hearing_cancelled, default=""),
             "progress": extract_progress(result), "warnings": result.get("warnings", []),
             **case_identity(result)})
 
 
 def has_order(summary):
-    return summary.get("판결 주문", "").strip() not in UNKNOWN
+    order = summary.get("판결 주문", "").strip()
+    return order not in UNKNOWN and not no_hearing_judgment_cancelled(order)
 
 
 def schedule(settings, now, observed, previous):
@@ -196,7 +237,9 @@ def schedule(settings, now, observed, previous):
     remembered = previous.get("verdict_day", "")
     continued = max((h.day for h in hearings if h.kind in
                      {"공판", "공판준비", "변론", "변론준비", "심리", "심문"}), default="")
-    if remembered in observed["cancelled_verdict_days"] or not has_order(observed["summary"]) and remembered < continued:
+    if (remembered <= max(observed["cancelled_verdict_days"], default="")
+            or not has_order(observed["summary"]) and remembered < continued
+            or no_hearing_judgment_cancelled(observed["summary"].get("판결 주문"))):
         remembered = ""
     verdict_day = clean_day(observed["summary"].get("선고일자")) or max(verdict_days, default="") or remembered
     day_count = previous.get("verdict_count", 0) if previous.get("verdict_count_day") == today else 0

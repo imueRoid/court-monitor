@@ -55,6 +55,7 @@ class MonitorApp(tk.Tk):
         self.folder = Path(folder or data_directory())
         self.settings = pc_settings(self.folder)
         self.store = Store(self.settings.database)
+        self.store.resume_no_hearing_cancelled_cases(self.settings)
         self.startup_manager = startup_manager or Startup()
         self.events = queue.Queue()
         self.selected_ids, self.records = set(), {}
@@ -291,17 +292,24 @@ class MonitorApp(tk.Tk):
 
     def refresh(self):
         now = datetime.now(timezone.utc)
+        zone = ZoneInfo(self.settings.timezone)
+        today = now.astimezone(zone).date().isoformat()
         data = self.store.case_page(self.query.get(), self.page, int(self.page_size.get()), now=now)
         self.page, self.pages = data["page"], data["pages"]
         self.records = {row["id"]:row for row in data["cases"]}
         selected = self.selected
         self.tree.delete(*self.tree.get_children())
-        labels = {"pending":"조회 대기", "monitoring":"기일 확인 중", "awaiting_order":"주문 확인 대기", "done":"주문·종국결과 확인"}
+        labels = {"pending":"조회 대기", "monitoring":"변론 진행중", "awaiting_order":"주문 확인중", "done":"주문·종국결과 확인"}
         for row in self.records.values():
             hearing = next_hearing(row["observed"], now, self.settings.timezone)
             day = f"{hearing.day} {hearing.clock} {hearing.kind}" if hearing else "기일 미확인"
-            checked = datetime.fromtimestamp(row["last_checked"], ZoneInfo(self.settings.timezone)).strftime("%m.%d %H:%M") if row["last_checked"] else "—"
-            self.tree.insert("", "end", iid=row["id"], values=("☑" if row["id"] in self.selected_ids else "☐", row["case_number"], row["court"], row["party"], labels.get(row["state"], row["state"]) if row["active"] else "일시중지", day, checked))
+            checked = datetime.fromtimestamp(row["last_checked"], zone).strftime("%m.%d %H:%M") if row["last_checked"] else "—"
+            status = labels.get(row["state"], row["state"])
+            if row["state"] != "done" and hearing and hearing.kind == "선고":
+                status = "변론 종결됨" if hearing.day > today else "주문 확인중"
+            if not row["active"]:
+                status = "일시중지"
+            self.tree.insert("", "end", iid=row["id"], values=("☑" if row["id"] in self.selected_ids else "☐", row["case_number"], row["court"], row["party"], status, day, checked))
         if selected in self.records:
             self.tree.selection_set(selected)
             self.show_detail()

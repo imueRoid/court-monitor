@@ -11,7 +11,8 @@ from datetime import timedelta
 from zoneinfo import ZoneInfo
 
 from .case_identity import case_category
-from .domain import Hearing, calendar_hearings, event_payload, next_hearing, schedule, has_order, normalize_observed
+from .domain import (Hearing, calendar_hearings, event_payload, has_order, next_hearing,
+                     no_hearing_judgment_cancelled, normalize_observed, schedule)
 
 
 def encode(value):
@@ -215,6 +216,26 @@ class Store:
                                (int(active), int(active), time.time() if now is None else now, key)).rowcount
         return bool(count)
 
+    def resume_no_hearing_cancelled_cases(self, settings, now=None):
+        now = time.time() if now is None else now
+        moment = datetime.fromtimestamp(now, timezone.utc)
+        with self.db(True) as db:
+            rows = db.execute("SELECT * FROM cases WHERE state IN ('done', 'awaiting_order')").fetchall()
+            for row in rows:
+                observed = normalize_observed(json.loads(row["snapshot"]))
+                if not observed["cancelled_verdict_days"] and not no_hearing_judgment_cancelled(
+                        observed["summary"].get("판결 주문")):
+                    continue
+                plan = schedule(settings, moment, observed, {"verdict_day": row["verdict_day"]})
+                if plan["state"] == "done" or (
+                        plan["state"] == row["state"] and plan["verdict_day"] == row["verdict_day"]):
+                    continue
+                due = (now if plan["state"] == "monitoring" else plan["next_check"]) if row["active"] else None
+                db.execute("""UPDATE cases SET state=?,snapshot=?,next_check=?,verdict_day=?,
+                    verdict_count=?,verdict_count_day=? WHERE id=?""",
+                    (plan["state"], encode(observed), due, plan["verdict_day"],
+                     plan["verdict_count"], plan["verdict_count_day"], row["id"]))
+
     def claim_case(self, now, settings=None):
         with self.db(True) as db:
             rows = db.execute("SELECT * FROM cases WHERE (active=1 OR manual=1) AND next_check IS NOT NULL AND next_check<=? AND lease_until<=? ORDER BY next_check", (now, now)).fetchall()
@@ -238,7 +259,15 @@ class Store:
             if not row:
                 return False
             moment = datetime.fromtimestamp(now, timezone.utc)
-            observed = normalize_observed(observed)
+            previous = normalize_observed(json.loads(row["snapshot"]))
+            observed = normalize_observed({
+                **observed,
+                "cancelled_verdict_days": [
+                    *previous["cancelled_verdict_days"], *observed.get("cancelled_verdict_days", [])],
+                "no_hearing_cancelled_through": max(
+                    previous.get("no_hearing_cancelled_through", ""),
+                    observed.get("no_hearing_cancelled_through", "")),
+            })
             plan = schedule(settings, moment, observed, dict(row))
             due = now if row["manual"] else plan["next_check"]
             db.execute("""UPDATE cases SET state=?,snapshot=?,last_checked=?,next_check=?,last_error='',failures=0,

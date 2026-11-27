@@ -87,6 +87,7 @@ def create_app(settings=None, *, start_worker=True, worker_factory=Worker):
     settings = settings or Settings.from_env()
     build = get_build_info()
     store = Store(settings.database)
+    store.resume_no_hearing_cancelled_cases(settings)
     auth = Auth(store, settings)
     worker = worker_factory(store, settings)
     google = worker.calendar.connection

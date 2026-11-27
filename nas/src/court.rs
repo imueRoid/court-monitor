@@ -1091,6 +1091,49 @@ mod tests {
     }
 
     #[test]
+    fn cancelled_verdict_without_next_hearing_does_not_restore_an_older_verdict() {
+        let stale = json!({"dma_csBasCtt":{"jdgmnPrnYmd":"20260115"},
+            "dlt_rcntDxdyLst":[{"dxdyYmd":"20260115","dxdyKndNm":"판결선고기일"}]});
+        let mut cancelled = stale.clone();
+        cancelled["dlt_rcntDxdyLst"].as_array_mut().unwrap().push(
+            json!({"dxdyYmd":"20260131","dxdyKndNm":"판결선고기일","dxdyRsltNm":"무변론판결취소"}),
+        );
+        let read = |data: &Value| {
+            snapshot(data, None, &HashMap::new(), "CV", "2024가단1", "가상당사자", Vec::new())
+        };
+        let first = read(&cancelled);
+        assert_eq!(first.no_hearing_cancelled_through, "2026-01-31");
+        let mut later = read(&stale);
+        later.retain_judgment(&first);
+        let moment = chrono::DateTime::parse_from_rfc3339("2026-02-02T10:00:00+09:00")
+            .unwrap()
+            .with_timezone(&chrono_tz::Asia::Seoul);
+        let settings = crate::config::Settings::from_env().unwrap();
+        for o in [&first, &later] {
+            assert!(o.next(moment).is_none());
+            assert_eq!(
+                o.judgment_stage("2026-02-02", o.next(moment), "2026-01-15"),
+                domain::JudgmentStage::BeforeVerdict
+            );
+            let plan = domain::schedule(&settings, moment, o, "2026-01-15", 0, "");
+            assert_eq!(plan.state, "monitoring");
+            assert!(plan.verdict_day.is_empty());
+        }
+
+        let mut rescheduled = read(&json!({"dlt_rcntDxdyLst":[
+            {"dxdyYmd":"20260205","dxdyKndNm":"판결선고기일"}]}));
+        rescheduled.retain_judgment(&first);
+        assert_eq!(
+            rescheduled.judgment_stage("2026-02-02", rescheduled.next(moment), ""),
+            domain::JudgmentStage::AwaitingVerdict
+        );
+
+        let mut decided = read(&json!({"dma_csBasCtt":{"csUltmtYmd":"20260205","csUltmtDvsNm":"원고일부승"}}));
+        decided.retain_judgment(&first);
+        assert!(decided.order());
+    }
+
+    #[test]
     fn normalizes_resumed_trial_and_keeps_ambiguous_roles_unknown() {
         let data = json!({
             "dma_csBasCtt":{"jdgmnPrnYmd":"20260115"},

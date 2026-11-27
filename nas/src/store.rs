@@ -398,8 +398,9 @@ impl Store {
             let moment = local(at, settings.timezone);
             for (id, raw, remembered, state, active) in rows {
                 let Ok(mut observed) = serde_json::from_str::<Observation>(&raw) else { continue; };
-                if !observed.has_no_hearing_judgment_cancellation() { continue; }
                 observed.normalize();
+                if !observed.has_no_hearing_judgment_cancellation()
+                    && observed.cancelled_verdict_days.is_empty() { continue; }
                 let plan = schedule(settings, moment, &observed, &remembered, 0, "");
                 if plan.state == "done" || plan.state == state && plan.verdict_day == remembered { continue; }
                 let due = if !active { None } else if plan.state == "monitoring" { Some(at) } else { plan.next };
@@ -666,7 +667,7 @@ mod tests {
         let settings = Settings::from_env()?;
         let date = "2026-01-31";
         let ids = store.import(
-            &(1..=4)
+            &(1..=5)
                 .map(|n| CaseInput {
                     court: "가상법원".into(),
                     case_number: format!("2024가단{n}"),
@@ -695,6 +696,12 @@ mod tests {
                 true,
                 json!({"summary":{"판결 주문":"원고일부승","선고일자":"2026-02-05"},"progress":[{"day":date,"content":"판결선고기일 (10:00)","result":"무변론판결취소"}]}),
             ),
+            (
+                "awaiting_order",
+                true,
+                json!({"summary":{"선고일자":"2026-01-15"},"hearings":[{"kind":"선고","day":"2026-01-15"}],
+                    "cancelled_hearings":[{"day":date,"kind":"선고"}],"cancelled_verdict_days":[date]}),
+            ),
         ];
         store.write(|db| {
             for (id, (state, active, snapshot)) in ids.iter().zip(saved) {
@@ -719,6 +726,10 @@ mod tests {
         assert_eq!(row(2)["next_check"], at);
         assert_eq!(row(3)["state"], "done");
         assert_eq!(row(3)["judgment_stage"], "decided");
+        assert_eq!(row(4)["state"], "monitoring");
+        assert_eq!(row(4)["judgment_stage"], "before_verdict");
+        assert_eq!(row(4)["next_check"], at);
+        assert!(row(4)["next_hearing"].is_null());
         Ok(())
     }
 

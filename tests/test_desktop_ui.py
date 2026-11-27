@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 import sys
@@ -35,6 +36,27 @@ class DesktopUiTests(unittest.TestCase):
         open_page.assert_called_once_with(release_page("1.0.50"))
         self.app._show_update_result(None, False)
         self.assertFalse(self.app.update_banner.winfo_manager())
+
+    def test_saved_no_hearing_cancellation_reopens_and_shows_trial_in_progress(self):
+        key = self.app.store.add_case("가상법원", "2024가단1", "가상당사자")
+        checked = datetime(2026, 2, 2, 1, tzinfo=timezone.utc).timestamp()
+        snapshot = {
+            "summary": {"선고일자": "2026.01.15"},
+            "hearings": [{"day": "2026-01-15", "kind": "선고", "clock": "14:00"}],
+            "progress": [{"day": "2026-01-31", "content": "판결선고기일", "result": "무변론판결취소"}],
+        }
+        with self.app.store.db(True) as db:
+            db.execute("UPDATE cases SET state='awaiting_order', verdict_day='2026-01-15', snapshot=? WHERE id=?",
+                       (json.dumps(snapshot), key))
+        self.app.store.resume_no_hearing_cancelled_cases(self.app.settings, now=checked)
+        self.app.refresh()
+        self.assertEqual(self.app.tree.item(key, "values")[4:6], ("변론 진행중", "기일 미확인"))
+        job = self.app.store.claim_case(checked, self.app.settings)
+        self.assertEqual(job["id"], key)
+        snapshot.pop("progress")
+        self.app.store.complete(key, job["lease_token"], snapshot, self.app.settings, checked)
+        self.app.refresh()
+        self.assertEqual(self.app.tree.item(key, "values")[4:6], ("변론 진행중", "기일 미확인"))
 
     def test_preferences_are_in_settings_tab_and_default_off(self):
         self.assertFalse(self.app.auto_start.get())
