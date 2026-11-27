@@ -68,12 +68,17 @@ async fn main() -> Result<()> {
         healthcheck(port).await?;
     } else if mode.as_deref() == Some("--sqlite-version") {
         println!("{}", rusqlite::version());
-    } else if mode.as_deref() == Some("--ocr-smoke") {
+    } else if matches!(mode.as_deref(), Some("--ocr-smoke" | "--ocr-worker")) {
         let image = std::fs::read(
             args.next()
                 .ok_or_else(|| anyhow::anyhow!("missing image"))?,
         )?;
-        println!("{}", ocr::Ocr::default().recognize(&image)?);
+        let answer = if mode.as_deref() == Some("--ocr-worker") {
+            ocr::Ocr::default().recognize(&image)?
+        } else {
+            ocr::recognize_in_worker(image).await?
+        };
+        println!("{answer}");
     } else if mode.as_deref() == Some("--serve") {
         let run_dir = PathBuf::from(args.next().expect("missing run directory"));
         let options = supervise::Listen::from_args(args)?;

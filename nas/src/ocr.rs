@@ -4,7 +4,38 @@ use image::{
     DynamicImage, ImageReader, Limits,
 };
 use ort::{session::Session, value::Tensor};
-use std::{env, io::Cursor};
+use std::{
+    env,
+    io::{Cursor, Write},
+    process::Stdio,
+    time::Duration,
+};
+use tokio::{process::Command, time::timeout};
+
+pub async fn recognize_in_worker(image: Vec<u8>) -> Result<String> {
+    let input = tokio::task::spawn_blocking(move || -> Result<_> {
+        let mut file = tempfile::NamedTempFile::new()?;
+        file.write_all(&image)?;
+        Ok(file)
+    })
+    .await??;
+    let mut worker = Command::new(env::current_exe()?);
+    worker
+        .arg("--ocr-worker")
+        .arg(input.path())
+        .env("TOKIO_WORKER_THREADS", "1")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let output = timeout(Duration::from_secs(15), worker.output())
+        .await
+        .context("OCR 작업이 15초를 초과했습니다.")??;
+    ensure!(
+        output.status.success(),
+        "보안문자를 자동 인식하지 못했습니다."
+    );
+    Ok(String::from_utf8(output.stdout)?.trim().to_owned())
+}
 
 #[derive(Default)]
 pub struct Ocr {

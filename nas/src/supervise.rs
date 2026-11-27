@@ -206,8 +206,7 @@ pub async fn run(listen: Listen) -> Result<()> {
         tokio::select! {
             result = check_on_boot(&updates, &installed) => {
                 if let Err(error) = result {
-                    eprintln!("Update check failed; starting the installed version: {error:#}");
-                    journal.record(Source::Supervisor, "Boot update check failed");
+                    journal.record(Source::Supervisor, format_args!("Boot update check failed: {}", error_kind(&error)));
                 }
             }
             _ = stop(&mut term, &mut interrupt) => return Ok(()),
@@ -268,7 +267,13 @@ pub async fn run(listen: Listen) -> Result<()> {
                                 .and_then(|()| updates.clear("history"))
                         };
                         if let Err(error) = recorded {
-                            eprintln!("Could not record the running release: {error:#}");
+                            journal.record(
+                                Source::Supervisor,
+                                format_args!(
+                                    "Could not record the running release: {}",
+                                    error_kind(&error)
+                                ),
+                            );
                         }
                     }
                     tokio::fs::write(run_dir.path().join("accepted"), b"").await?;
@@ -302,11 +307,6 @@ pub async fn run(listen: Listen) -> Result<()> {
                 format_args!("App {id} failed to start: {}", error_kind(error)),
             );
             if let Some(release) = release {
-                eprintln!(
-                    "Release {} could not start; falling back: {:#}",
-                    release.version,
-                    start.unwrap_err()
-                );
                 if version(&release.version) > version(&updates.marker("failed")) {
                     updates.write("failed", &release.version)?;
                 }

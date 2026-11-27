@@ -3,7 +3,7 @@ use anyhow::{bail, ensure, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use chrono::{Datelike, Utc};
 use regex::Regex;
-use reqwest::{redirect, Client, Url};
+use reqwest::{redirect, Client, Response, Url};
 use serde_json::{json, Map, Value};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
@@ -16,8 +16,29 @@ const BASE: &str = "https://ssgo.scourt.go.kr";
 const ENTRY: &str = "/ssgo/index.on?cortId=www";
 const W2: &str = "http://www.inswave.com/websquare";
 const XF: &str = "http://www.w3.org/2002/xforms";
+const RESPONSE_LIMIT: usize = 16 * 1024 * 1024;
 static CASE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^([0-9]{4})([가-힣]+)([0-9]{1,7})$").unwrap());
+
+async fn response_bytes(mut response: Response) -> Result<Vec<u8>> {
+    const TOO_LARGE: &str = "법원 서버 응답이 너무 큽니다.";
+    ensure!(
+        response
+            .content_length()
+            .is_none_or(|length| length <= RESPONSE_LIMIT as u64),
+        "{TOO_LARGE}"
+    );
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| error.without_url())?
+    {
+        ensure!(chunk.len() <= RESPONSE_LIMIT - bytes.len(), "{TOO_LARGE}");
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
+}
 
 pub fn number(value: &str) -> Result<String> {
     let value: String = value.chars().filter(|ch| !ch.is_whitespace()).collect();
@@ -702,12 +723,15 @@ impl Court {
             .map_err(|e| e.without_url())
             .context("법원 서버에 연결할 수 없습니다.")?;
         let ok = res.status().is_success();
-        let text = res.text().await?;
+        let bytes = response_bytes(res).await?;
         ensure!(
-            ok && !text.to_ascii_lowercase().contains("web firewall"),
+            ok && !bytes
+                .windows(b"web firewall".len())
+                .any(|word| word.eq_ignore_ascii_case(b"web firewall")),
             "법원 사이트가 접속을 제한했거나 점검 중입니다. 잠시 후 다시 시도하세요."
         );
-        Ok(text)
+        Ok(String::from_utf8(bytes)
+            .unwrap_or_else(|error| String::from_utf8_lossy(error.as_bytes()).into_owned()))
     }
 
     async fn post(&self, path: &str, body: Value) -> Result<Value> {
@@ -736,7 +760,7 @@ impl Court {
             .map_err(|e| e.without_url())
             .context("법원 서버에 연결할 수 없습니다.")?;
         let status = response.status();
-        let payload: Value = response.json().await.context(
+        let mut payload: Value = serde_json::from_slice(&response_bytes(response).await?).context(
             "서버가 JSON 대신 다른 화면을 반환했습니다. 사이트 점검 또는 접속 제한을 확인하세요.",
         )?;
         let errors = &payload["errors"];
@@ -773,7 +797,7 @@ impl Court {
             payload["data"].is_object(),
             "서버 응답에 사건 데이터가 없습니다."
         );
-        Ok(payload["data"].clone())
+        Ok(payload["data"].take())
     }
 
     async fn query(&mut self, path: &str, params: &Value, page: &Value) -> Result<Value> {
@@ -799,13 +823,7 @@ impl Court {
         self.post(&definition.action, Value::Object(body)).await
     }
 
-    pub async fn lookup(
-        &mut self,
-        court: &str,
-        number: &str,
-        party: &str,
-        ocr: &mut crate::ocr::Ocr,
-    ) -> Result<Observation> {
+    pub async fn lookup(&mut self, court: &str, number: &str, party: &str) -> Result<Observation> {
         let parts = CASE.captures(number).context("사건번호를 확인하세요.")?;
         let (_year, kind, serial) = (&parts[1], &parts[2], &parts[3]);
         let court_code = self
@@ -833,7 +851,7 @@ impl Court {
         let params = json!({"cortCd":court_code,"csYear":&parts[1],"csDvsCd":code,"csDvsNm":kind,"csSerial":serial,"btprtNm":party});
         for attempt in 0..3 {
             match self
-                .challenge_lookup(&general_path, &progress_path, params.clone(), ocr)
+                .challenge_lookup(&general_path, &progress_path, params.clone())
                 .await
             {
                 Ok((general, progress, warnings)) => {
@@ -872,7 +890,6 @@ impl Court {
         general_path: &str,
         progress_path: &str,
         mut params: Value,
-        ocr: &mut crate::ocr::Ocr,
     ) -> Result<(Value, Option<Value>, Vec<String>)> {
         let challenge = self
             .post("/ssgo/ssgo10l/getCaptchaInf.on", json!({}))
@@ -889,14 +906,7 @@ impl Court {
         let image = STANDARD
             .decode(image.rsplit(',').next().unwrap_or_default())
             .context("보안문자 이미지 형식이 변경되었습니다.")?;
-        let mut reader = std::mem::take(ocr);
-        let (reader, answer) = tokio::task::spawn_blocking(move || {
-            let answer = reader.recognize(&image);
-            (reader, answer)
-        })
-        .await?;
-        *ocr = reader;
-        let answer = answer?;
+        let answer = crate::ocr::recognize_in_worker(image).await?;
         params["captchaAnswer"] = json!(format!("{answer}{token}"));
         let general = self.query(general_path, &params, &Value::Null).await?;
         let basic = &general["dma_csBasCtt"];
@@ -936,6 +946,48 @@ impl Court {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn oversized_chunked_response_is_rejected() -> Result<()> {
+        use std::{
+            io::{BufRead, BufReader, Write},
+            net::TcpListener,
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let address = listener.local_addr()?;
+        let server = std::thread::spawn(move || -> std::io::Result<()> {
+            let (mut socket, _) = listener.accept()?;
+            socket.set_read_timeout(Some(Duration::from_secs(5)))?;
+            socket.set_write_timeout(Some(Duration::from_secs(5)))?;
+            let mut reader = BufReader::new(&mut socket);
+            let mut line = String::new();
+            while reader.read_line(&mut line)? > 0 && line != "\r\n" {
+                line.clear();
+            }
+            socket.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n")?;
+            let chunk = [b'a'; 64 * 1024];
+            for _ in 0..=RESPONSE_LIMIT / chunk.len() {
+                write!(socket, "{:x}\r\n", chunk.len())?;
+                socket.write_all(&chunk)?;
+                socket.write_all(b"\r\n")?;
+            }
+            socket.write_all(b"0\r\n\r\n")
+        });
+        let response = Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(5))
+            .build()?
+            .get(format!("http://{address}"))
+            .send()
+            .await?;
+        assert_eq!(response.content_length(), None);
+        let error = response_bytes(response).await.unwrap_err();
+        assert_eq!(error.to_string(), "법원 서버 응답이 너무 큽니다.");
+        // Closing the connection as soon as the limit is hit can interrupt the writer.
+        let _ = tokio::task::spawn_blocking(move || server.join().unwrap()).await?;
+        Ok(())
+    }
 
     #[test]
     fn court_fields_produce_roles_appeals_and_progress() {

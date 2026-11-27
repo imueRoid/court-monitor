@@ -7,6 +7,7 @@ const settingsTab = $("settings-tab");
 const finishedTab = $("finished-tab");
 let activeDashboardTab = dashboardTab;
 let searchTimer;
+let caseReload;
 
 function setCalendarConfigured(configured) {
   state.calendarConfigured = configured;
@@ -91,7 +92,7 @@ function caseBadge(row) {
   return node("span", labels[label], waiting ? "badge wait" : "badge");
 }
 function notice(text,warn=false){$("notice").textContent=text;$("notice").classList.toggle("warn",warn);}
-async function api(path,body){const options={credentials:"same-origin",headers:{}};if(body!==undefined){options.method="POST";options.headers={"Content-Type":"application/json","X-CSRF-Token":state.csrf};options.body=JSON.stringify(body);}const response=await fetch("/api"+path,options);const data=await response.json();if(response.status===401)location.assign("/login");if(!response.ok){let error=data.detail;if(Array.isArray(error))error=error.map(x=>x.msg).join(" / ");throw Object.assign(new Error(typeof error==="string"?error:"서버 요청을 처리하지 못했습니다."),{status:response.status});}return data;}
+async function api(path,body,signal){const options={credentials:"same-origin",headers:{},signal};if(body!==undefined){options.method="POST";options.headers={"Content-Type":"application/json","X-CSRF-Token":state.csrf};options.body=JSON.stringify(body);}const response=await fetch("/api"+path,options);const data=await response.json();if(response.status===401)location.assign("/login");if(!response.ok){let error=data.detail;if(Array.isArray(error))error=error.map(x=>x.msg).join(" / ");throw Object.assign(new Error(typeof error==="string"?error:"서버 요청을 처리하지 못했습니다."),{status:response.status});}return data;}
 async function reloadDiagnostics() {
   const button = $("reload-diagnostics");
   if (button.disabled) return;
@@ -257,11 +258,30 @@ async function refreshDetail(row){
   try{await api("/cases/"+row.id+"/detail-refresh",{});await reload();}
   catch(error){state.detailRequests.delete(row.id);state.detailErrors.set(row.id,"최신 조회 요청 실패: "+error.message);if(state.selected===row.id)renderDetail(row);}
 }
-async function reload(){
+function reload() {
+  const pending = fetchCases();
+  caseReload = pending;
+  return pending.finally(() => {
+    if (caseReload === pending) caseReload = null;
+  });
+}
+
+async function pollCases() {
+  try {
+    if (!caseReload) await reload();
+  } catch (error) {
+    notice(error.message, true);
+  } finally {
+    setTimeout(pollCases, 10_000);
+  }
+}
+
+async function fetchCases(){
   const request=++state.request;
   const params=new URLSearchParams({scope:state.scope,q:state.query,page:state.page,page_size:state.pageSize});
+  const signal = AbortSignal.timeout(30_000);
   let data,logData;
-  try{[data,logData]=await Promise.all([api(`/cases?${params}`),api("/logs")]);}
+  try{[data,logData]=await Promise.all([api(`/cases?${params}`, undefined, signal),api("/logs", undefined, signal)]);}
   catch(error){
     if(request!==state.request)return;
     state.scopeLoading=false;
@@ -274,7 +294,7 @@ async function reload(){
   $("logs").replaceChildren();
   for(const log of logData.logs){const item=node("li");item.append(node("time",fmt(log.at)),node("span",log.message,log.level==="error"?"error":""));$("logs").append(item);}
   if (data.calendar_configured !== state.calendarConfigured) {
-    const google = await api("/google/status").catch(() => null);
+    const google = await api("/google/status", undefined, signal).catch(() => null);
     if (request !== state.request) return;
     if (google) renderGoogle(google, data.calendar_configured);
     else setCalendarConfigured(data.calendar_configured);
@@ -313,8 +333,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     window.dispatchEvent(new CustomEvent("court-ready", {detail: config.google}));
     state.courts = config.courts;
     $("session-info").textContent = `이 기기의 로그인 유지 기간: ${config.session_days}일. 암호와 세션은 서버 DB에서 관리합니다.`;
-    await reload();
-    setInterval(() => reload().catch(error => notice(error.message, true)), 10_000);
+    void pollCases();
     if (!state.courts.length) setTimeout(async () => {
       try { state.courts = (await api("/bootstrap")).courts; } catch {}
     }, 10_000);
