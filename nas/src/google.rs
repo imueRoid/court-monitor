@@ -15,6 +15,9 @@ use std::{fs, io::Write, os::unix::fs::OpenOptionsExt, sync::Arc, time::Duration
 use tokio::{sync::Mutex, task::block_in_place};
 
 pub const CALLBACK: &str = "/oauth/google/callback";
+#[path = "shared_google.rs"]
+mod shared;
+pub use shared::{SharedClaim, SharedRefresh, SharedStart, SHARED_PREFIX};
 const AUTH: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN: &str = "https://oauth2.googleapis.com/token";
 const CALENDARS: &str = "https://www.googleapis.com/calendar/v3/calendars";
@@ -30,6 +33,7 @@ pub struct Google {
     calendars_endpoint: String,
     gate: Mutex<()>,
     service_token: Mutex<Option<(String, f64)>>,
+    shared: shared::Shared,
 }
 
 fn value(db: &Connection, key: &str) -> Result<Value> {
@@ -107,6 +111,7 @@ impl Google {
             calendars_endpoint: CALENDARS.to_owned(),
             gate: Mutex::new(()),
             service_token: Mutex::new(None),
+            shared: shared::Shared::from_env()?,
         })
     }
 
@@ -142,9 +147,13 @@ impl Google {
         let calendar = value(&db, "google_calendar")?;
         let id = if mode { text(&calendar["id"]) } else { "" };
         let tokens = !value(&db, "google_tokens")?.is_null();
+        let pending = !value(&db, "google_pending_tokens")?.is_null();
+        let client = !value(&db, "google_client")?.is_null();
+        let method = meta::<String>(&db, "google_connection_method")?
+            .unwrap_or_else(|| if client { "direct" } else { "shared" }.into());
         Ok(
-            json!({"client_configured":!value(&db,"google_client")?.is_null(),
-            "authorized":mode&&(tokens||!value(&db,"google_pending_tokens")?.is_null()),
+            json!({"client_configured":client,"shared_available":true,"connection_method":method,
+            "authorized":(mode&&tokens)||pending,"pending_authorization":pending,
             "connected":!id.is_empty()&&tokens,"calendar_id":id,
             "calendar_name":text(&calendar["summary"]),"error":text(&value(&db,"google_error")?)}),
         )
@@ -189,7 +198,7 @@ impl Google {
         let client = json!({"client_id":id,"client_secret":secret,"redirect_uris":uris,"auth_uri":AUTH,"token_uri":TOKEN});
         self.store.write(|db| {
             if self.secret(db,"google_client")?!=client {
-                db.execute("DELETE FROM meta WHERE key IN ('google_tokens','google_calendar','google_pending_tokens')",[])?;
+                db.execute("DELETE FROM meta WHERE key IN ('google_tokens','google_calendar','google_pending_tokens','google_shared_pending','google_connection_method')",[])?;
                 db.execute("DELETE FROM google_oauth_states",[])?;
                 set_meta(db,"google_generation",generation(db)?+1)?;
             }
@@ -223,6 +232,7 @@ impl Google {
                 "DELETE FROM google_oauth_states WHERE expires<=?1 OR session_hash=?2",
                 params![time, session],
             )?;
+            db.execute("DELETE FROM meta WHERE key='google_shared_pending'", [])?;
             db.execute(
                 "INSERT INTO google_oauth_states VALUES (?1,?2,?3,?4,?5,?6)",
                 params![
@@ -347,7 +357,7 @@ impl Google {
     fn clear_connection(&self) -> Result<Value> {
         self.store.write(|db| {
             db.execute(
-                "DELETE FROM meta WHERE key IN ('google_tokens','google_pending_tokens')",
+                "DELETE FROM meta WHERE key IN ('google_tokens','google_pending_tokens','google_shared_pending')",
                 [],
             )?;
             db.execute("DELETE FROM google_oauth_states", [])?;
@@ -410,6 +420,12 @@ impl Google {
         self.store.write(|db| {
             let pending = self.secret(db, key)?;
             self.save(db, "google_tokens", &pending)?;
+            let method = if pending["shared_grant"].is_string() {
+                "shared"
+            } else {
+                "direct"
+            };
+            set_meta(db, "google_connection_method", method)?;
             set_meta(db, "google_calendar", json!({"id":id,"summary":name}))?;
             set_meta(db, "google_mode", "oauth")?;
             set_meta(db, "google_generation", generation(db)? + 1)?;
@@ -447,6 +463,13 @@ impl Google {
             let expiry = expiry(text(&tokens["expiry"]));
             if !refresh && !token.is_empty() && expiry > now() + 120.0 {
                 return Ok(token.to_owned());
+            }
+            if let Some(grant) = tokens["shared_grant"].as_str() {
+                let result = self.request_shared_refresh(grant).await?;
+                tokens["shared_grant"] = result["shared_grant"].clone();
+                merge_token(&mut tokens, &result)?;
+                block_in_place(|| self.store.write(|db| self.save(db, key, &tokens)))?;
+                return Ok(text(&tokens["token"]).to_owned());
             }
             let stored_refresh = text(&tokens["refresh_token"]);
             ensure!(!stored_refresh.is_empty(), "Google 계정에 먼저 연결하세요.");

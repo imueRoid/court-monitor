@@ -272,6 +272,10 @@ pub async fn run(directory: &Path, listen: Listen, journal: &Journal) -> Result<
     store.resume_no_hearing_cancelled_cases(crate::store::now(), &settings)?;
     let auth = Arc::new(Auth::new(store.clone(), &settings)?);
     let google = Arc::new(Google::new(store.clone(), settings.clone())?);
+    let broker_cleanup = google.broker_enabled().then(|| {
+        let google = google.clone();
+        tokio::spawn(async move { google.clean_broker_results().await })
+    });
     let (database_health, last_database_check) = watch::channel((Instant::now(), true));
     tokio::fs::metadata("server/static/index.html")
         .await
@@ -336,6 +340,9 @@ pub async fn run(directory: &Path, listen: Listen, journal: &Journal) -> Result<
         _=requested.changed()=>{restart=*requested.borrow(); Ok(())},
     };
     database.abort();
+    if let Some(cleanup) = broker_cleanup {
+        cleanup.abort();
+    }
     court.abort();
     calendar.abort();
     if !server.is_finished() {

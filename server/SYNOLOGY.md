@@ -9,7 +9,7 @@ Intel/AMD x86_64 CPU와 Container Manager를 사용하는 NAS 기준입니다. �
 3. Container Manager → 프로젝트 → 생성에서 그 폴더를 선택합니다. Compose 내용을 편집기에 넣거나 `docker-compose.yml`로 업로드하고 시작합니다.
 4. `http://NAS-IP:7708`로 접속합니다. 처음 설정 화면에서 관리자 비밀번호를 두 번 입력합니다. 이후에는 로그인 화면이 나옵니다.
 5. Calendar 연동을 사용하려면 관리 화면의 **설정 → Google Calendar 연결 → 처음부터 따라 하는 상세 안내**를 엽니다. 안내 주소는 `http://NAS-IP:7708/guide/google`입니다.
-6. 안내를 따라 본인의 OAuth 앱을 설정하고, 내려받은 웹 애플리케이션 JSON을 NAS에 등록합니다. **Google 계정 연결**에서 본인 계정을 선택·승인하면 사건 전용 캘린더가 만들어집니다.
+6. **공통 인증 서버 사용 → Google 계정 연결 → Google 승인 창 열기**를 누릅니다. 본인 Google 계정으로 권한을 승인하면 NAS에 **연결됨**이 표시되고 사건 전용 캘린더가 만들어집니다.
 
 SSH로 실행한다면:
 
@@ -19,13 +19,24 @@ sudo docker compose -f compose.synology.yaml up -d
 
 NAS가 구형 `docker-compose` 명령을 사용한다면 같은 인수로 실행합니다. **호스트 네트워크(`network_mode: host`)**를 사용하고 프로그램이 NAS의 **7708 포트**에서 직접 수신합니다. `ports` 매핑은 사용하지 않으며 상태 검사도 7708 포트로 수행합니다. 변경된 Compose를 적용할 때는 같은 프로젝트를 재생성합니다.
 
-## Google 독립 인증
+## Google Calendar 연결
 
-각 설치자가 본인 Google Cloud 프로젝트와 승인 권한을 관리합니다. 설치 후 **설정 → Google Calendar 연결 → 처음부터 따라 하는 상세 안내**에서 실제로 접속 중인 주소의 콜백을 복사할 수 있습니다. 상세 안내에는 설정을 맡길 때 사용할 요청문과 오류별 해결 방법도 있습니다.
+기본 연결은 `court.imue.one`의 공통 인증 서버를 사용합니다. 공통 서버는 Google 승인과 토큰 갱신을 처리합니다. 사건 일정은 설치된 NAS에서 Google Calendar로 직접 전송됩니다. 이미 Google Calendar를 연결한 NAS는 업데이트 후에도 기존 연결을 사용합니다.
+
+### 내 Google Cloud 프로젝트로 직접 연결
+
+자체 OAuth를 사용하려면 **설정 → Google Calendar 연결 → 내 Google Cloud 프로젝트 사용**을 선택합니다. **처음부터 따라 하는 상세 안내**에서 실제 접속 주소의 콜백, 설정 요청문과 오류별 해결 방법을 확인할 수 있습니다.
 
 1. NAS를 HTTPS 도메인으로 열거나 PC에서 NAS로 localhost SSH 터널을 연 뒤 같은 브라우저로 접속합니다. 예를 들어 HTTPS를 쓰면 `https://court.example.com/oauth/google/callback`, 기본 localhost 터널을 쓰면 `http://localhost:7708/oauth/google/callback`을 Google에 등록합니다. [DSM 역방향 프록시](https://kb.synology.com/en-global/DSM/help/DSM/AdminCenter/system_login_portal_advanced?version=7) · [Google 리디렉션 URI 규칙](https://developers.google.com/identity/protocols/oauth2/web-server#uri-validation)
 2. 본인 계정 한 개를 연결하는 새 프로젝트는 Google의 개인 모드를 사용할 수 있습니다. 기존 외부 프로젝트는 **대상**에서 테스트 사용자와 게시 상태를 확인합니다. 외부 테스트 모드의 Calendar 승인은 7일 뒤 만료됩니다. 같은 프로젝트에서 Calendar API를 켜고 앱이 요청하는 `calendar.app.created` 권한을 확인합니다. [개인 모드 설정](https://console.cloud.google.com/auth/overview/personal) · [사용자 유형과 게시 상태](https://support.google.com/cloud/answer/15549945?hl=ko) · [Calendar API 사용 설정](https://console.cloud.google.com/apis/library/calendar-json.googleapis.com) · [Calendar 권한 범위](https://developers.google.com/workspace/calendar/api/auth)
 3. 웹 애플리케이션 클라이언트의 승인된 리디렉션 URI를 등록하고, 생성 창에서 시크릿이 포함된 JSON을 내려받아 비공개로 보관합니다. 같은 주소로 NAS에 로그인해 **OAuth JSON 선택하여 등록 → Google 계정 연결**을 진행하고 Google Calendar의 **사건 관리** 캘린더를 확인합니다. [OAuth 클라이언트 콘솔](https://console.cloud.google.com/auth/clients) · [클라이언트 JSON과 시크릿 관리](https://support.google.com/cloud/answer/15549257)
+
+### 공통 인증 운영자 설정
+
+1. `court.imue.one`을 서비스하는 운영 NAS에서 최신 앱 업데이트를 적용합니다. Google Auth Platform의 웹 애플리케이션 클라이언트에 `https://court.imue.one/oauth/google/callback`을 승인된 리디렉션 URI로 등록합니다. 외부 사용자가 승인할 수 있는 게시 상태와 Calendar API 사용 여부를 같은 프로젝트에서 확인합니다. [OAuth 클라이언트 설정](https://console.cloud.google.com/auth/clients) · [게시 상태와 사용자 한도](https://support.google.com/cloud/answer/15549945?hl=ko)
+2. 운영 NAS의 **설정 → Google Calendar 연결 → 내 Google Cloud 프로젝트 사용**에서 해당 웹 클라이언트의 JSON이 등록되어 있는지 확인합니다. 이미 같은 클라이언트가 등록되어 있으면 재등록할 필요가 없습니다. OAuth 시크릿을 포함한 JSON은 운영 NAS에서 관리합니다.
+3. 운영 NAS의 기존 Compose 서비스 `environment`에 `COURT_GOOGLE_BROKER_ENABLED: "true"`를 추가하고 같은 데이터 볼륨으로 프로젝트를 다시 시작합니다. HTTPS 역방향 프록시에서 요청의 `Host`가 `court.imue.one`으로 앱에 전달되어야 합니다. 다른 설치는 기본값 그대로 공통 인증을 사용합니다.
+4. 다른 NAS에서 **공통 인증 서버 사용**으로 Google 계정을 승인하고, 원래 NAS 화면에 **연결됨**이 표시되는지 확인합니다. 운영 NAS의 `court_data` 볼륨을 백업할 때 DB와 `credentials.key`를 함께 보존해야 기존 공통 인증 연결의 토큰 갱신을 계속 처리할 수 있습니다.
 
 ## 사건 조회와 화면
 

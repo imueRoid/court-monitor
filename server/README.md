@@ -45,9 +45,9 @@ docker compose --profile https up -d --build
 
 ## 3. Google Calendar 연결
 
-웹의 **설정 → Google Calendar 연결 → 처음부터 따라 하는 상세 안내**를 엽니다. 각 설치자가 본인 Google Cloud 프로젝트에서 웹 OAuth 클라이언트를 만들고 JSON을 등록한 다음 Google에서 승인하면, 본인 계정에 사건 전용 캘린더가 만들어집니다. [Google 연결 절차](SYNOLOGY.md#google-독립-인증) · [Google Auth Platform 도움말](https://support.google.com/cloud/answer/15544987)
+웹의 **설정 → Google Calendar 연결**에서 기본값인 **공통 인증 서버 사용**을 선택하고 Google 계정을 승인합니다. 승인과 토큰 갱신은 `court.imue.one`에서 처리하며, 일정은 설치된 서버가 Google Calendar로 직접 보냅니다. [Google 연결 절차](SYNOLOGY.md#google-calendar-연결)
 
-앱의 `/guide/google`에서 현재 주소의 콜백을 복사합니다. 예를 들어 기본 SSH 터널에서 앱을 열면 콜백은 `http://127.0.0.1:8080/oauth/google/callback`입니다. 성공적으로 연결한 뒤 사건에 기일이 확인되면 Google Calendar의 **사건 관리** 캘린더에 반영됩니다.
+자체 OAuth를 운영하려면 **내 Google Cloud 프로젝트 사용**을 선택하고 웹 OAuth 클라이언트 JSON을 등록합니다. 앱의 `/guide/google`에서 현재 주소의 콜백을 복사합니다. 예를 들어 기본 SSH 터널에서 앱을 열면 콜백은 `http://127.0.0.1:8080/oauth/google/callback`입니다. 두 방식 모두 연결 후 확인된 기일이 Google Calendar의 **사건 관리** 캘린더에 반영됩니다. [Google Auth Platform 도움말](https://support.google.com/cloud/answer/15544987)
 
 ### 기존 서비스 계정 호환 설정
 

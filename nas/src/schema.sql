@@ -26,3 +26,6 @@ CREATE TABLE IF NOT EXISTS google_oauth_states (
     state_hash TEXT PRIMARY KEY, session_hash TEXT NOT NULL, expires REAL NOT NULL,
     verifier TEXT NOT NULL, redirect_uri TEXT NOT NULL, generation INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS google_shared_results (
+    id TEXT PRIMARY KEY, claim_hash TEXT NOT NULL, expires REAL NOT NULL, result TEXT
+);

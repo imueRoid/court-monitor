@@ -27,7 +27,7 @@ Synology에서는 컨테이너가 시작되면 `http://NAS-IP:7708`에 접속해
 
 ## Google Calendar 연결
 
-캘린더 연동은 선택 사항입니다. 설치자마다 본인 Google Cloud 프로젝트에서 웹 OAuth 클라이언트를 만들고, 본인 NAS에만 JSON을 등록합니다. **설정 → Google Calendar 연결 → 처음부터 따라 하는 상세 안내**에서 개인 모드와 Calendar API, HTTPS 또는 localhost 접속, 콜백 URI, JSON 등록과 오류별 해결 방법을 확인할 수 있습니다. [시놀로지 안내의 Google 연결 절차](server/SYNOLOGY.md#google-독립-인증)
+캘린더 연동은 선택 사항입니다. NAS의 기본 연결 방법은 **공통 인증 서버 사용**입니다. **설정 → Google Calendar 연결**에서 Google 계정으로 승인하면 됩니다. 자체 OAuth를 운영하려면 **내 Google Cloud 프로젝트 사용**을 선택하고 본인 NAS에 웹 OAuth JSON을 등록합니다. 기존 연결은 업데이트 후에도 유지됩니다. [시놀로지 안내의 Google 연결 절차](server/SYNOLOGY.md#google-calendar-연결)
 
 ## 기존 NAS 설치 업데이트
 
