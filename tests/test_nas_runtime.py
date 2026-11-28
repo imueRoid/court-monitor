@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 import shutil
 import socket
 import sqlite3
@@ -51,6 +52,7 @@ class NativeNasTests(unittest.TestCase):
                 **os.environ,
                 "COURT_MONITOR_VERSION": "1.0.1", "COURT_MONITOR_RUNTIME": runtime,
                 "COURT_AUTO_UPDATE": "false", "DATABASE_PATH": str(mounted / database.name),
+                "COURT_GOOGLE_BROKER_ENABLED": "true",
                 "TOKIO_WORKER_THREADS": "1",
                 "HTTPS_PROXY": "http://127.0.0.1:1", "https_proxy": "http://127.0.0.1:1",
                 "NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1",
@@ -127,20 +129,36 @@ class NativeNasTests(unittest.TestCase):
                 self.assertEqual(bootstrap["csrf_token"], legacy_auth.csrf_token(legacy_session))
                 self.assertEqual(bootstrap["google"]["calendar_id"], "fixture-calendar")
                 redirect_uri = base + "/oauth/google/callback"
+                shared_callback = "https://court.imue.one/oauth/google/callback"
                 vault.set("google_client", {"client_id": "fixture.apps.googleusercontent.com",
-                    "client_secret": "fixture-only", "redirect_uris": [redirect_uri],
+                    "client_secret": "fixture-only", "redirect_uris": [redirect_uri, shared_callback],
                     "auth_uri": "https://accounts.google.com/o/oauth2/v2/auth",
                     "token_uri": "https://oauth2.googleapis.com/token"})
                 headers = {"X-CSRF-Token": bootstrap["csrf_token"], "Origin": base}
                 connected = session.post(base + "/api/google/start", headers=headers,
                     json={"redirect_uri": redirect_uri}, timeout=3)
                 self.assertEqual(connected.status_code, 200)
-                from urllib.parse import parse_qs, urlsplit
                 query = parse_qs(urlsplit(connected.json()["url"]).query)
                 self.assertEqual(query["code_challenge_method"], ["S256"])
+                self.assertEqual(requests.get(redirect_uri, params={"state": query["state"][0]},
+                    timeout=2).status_code, 401)
                 callback = session.get(redirect_uri, params={"state":query["state"][0],"error":"access_denied"},
                     allow_redirects=False, timeout=2)
                 self.assertEqual(callback.headers["Location"], "/?google=cancelled")
+                broker = base + "/oauth/shared/start"
+                claim = {"claim_hash": "a" * 64}
+                self.assertEqual(requests.post(broker, json=claim, timeout=2).status_code, 404)
+                broker_headers = {"Host": "court.imue.one"}
+                started = requests.post(broker, headers=broker_headers, json=claim, timeout=2)
+                self.assertEqual(started.status_code, 200)
+                shared_query = parse_qs(urlsplit(started.json()["url"]).query)
+                self.assertEqual(shared_query["redirect_uri"], [shared_callback])
+                denied = requests.get(redirect_uri, headers=broker_headers,
+                    params={"state": shared_query["state"][0], "error": "access_denied"}, timeout=2)
+                self.assertEqual(denied.status_code, 200)
+                self.assertEqual(denied.headers["Referrer-Policy"], "no-referrer")
+                self.assertEqual(requests.post(base + "/api/google/shared/complete",
+                    json={}, timeout=2).status_code, 401)
                 unauthorized = session.post(base + "/api/update", json={"version": "1.0.2"}, timeout=2)
                 self.assertEqual(unauthorized.status_code, 403)
                 self.assertTrue(session.post(base + "/api/login", headers={"Origin": base},

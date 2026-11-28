@@ -2,13 +2,13 @@ use crate::{
     auth::{token, Login},
     court,
     diagnostics::{console, error_kind},
-    google::CALLBACK,
+    google::{SharedClaim, SharedRefresh, SharedStart, CALLBACK, SHARED_PREFIX},
     store::{CaseInput, CaseScope, Store},
     web::{error, same_origin, App},
 };
 use anyhow::Result;
 use axum::{
-    extract::{ConnectInfo, Path, Query, Request, State},
+    extract::{ConnectInfo, DefaultBodyLimit, Path, Query, Request, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
     middleware::Next,
     response::{IntoResponse, Redirect, Response},
@@ -106,7 +106,14 @@ pub async fn security(request: Request, next: Next) -> Response {
 }
 
 pub fn public() -> Router<Arc<App>> {
+    let shared = Router::new()
+        .route("/oauth/shared/start", post(broker_start))
+        .route("/oauth/shared/claim", post(broker_claim))
+        .route("/oauth/shared/refresh", post(broker_refresh))
+        .layer(DefaultBodyLimit::max(16 * 1024));
     Router::new()
+        .merge(shared)
+        .route(CALLBACK, get(google_callback))
         .route("/health", get(health))
         .route("/", get(index))
         .route("/about", get(about))
@@ -138,9 +145,9 @@ pub fn protected() -> Router<Arc<App>> {
         .route("/api/google/status", get(google_status))
         .route("/api/google/client", post(google_client))
         .route("/api/google/start", post(google_start))
+        .route("/api/google/shared/complete", post(google_shared_complete))
         .route("/api/google/calendar", post(google_calendar))
         .route("/api/google/disconnect", post(google_disconnect))
-        .route(CALLBACK, get(google_callback))
 }
 
 async fn health(State(app): State<Arc<App>>) -> (StatusCode, Json<Value>) {
@@ -506,7 +513,10 @@ async fn google_client(
 
 #[derive(Deserialize)]
 struct GoogleStart {
+    #[serde(default)]
     redirect_uri: String,
+    #[serde(default)]
+    method: String,
 }
 
 async fn google_start(
@@ -515,6 +525,17 @@ async fn google_start(
     headers: HeaderMap,
     Json(input): Json<GoogleStart>,
 ) -> Reply<Json<Value>> {
+    if input.method == "shared" || (input.method.is_empty() && input.redirect_uri.is_empty()) {
+        let url = app
+            .google
+            .begin_shared(&session.0)
+            .await
+            .map_err(|err| invalid(&err.to_string()))?;
+        return Ok(Json(json!({"url":url,"method":"shared"})));
+    }
+    if !input.method.is_empty() && input.method != "direct" {
+        return Err(invalid("Google 연결 방법을 선택하세요."));
+    }
     let allowed = input
         .redirect_uri
         .parse::<axum::http::Uri>()
@@ -531,7 +552,22 @@ async fn google_start(
     }
     let result = blocking(move || Ok(app.google.begin(&input.redirect_uri, &session.0))).await?;
     let url = result.map_err(|err| invalid(&err.to_string()))?;
-    Ok(Json(json!({"url":url})))
+    Ok(Json(json!({"url":url,"method":"direct"})))
+}
+
+async fn google_shared_complete(
+    State(app): State<Arc<App>>,
+    Extension(session): Extension<Session>,
+) -> Reply<Json<Value>> {
+    let result = app
+        .google
+        .finish_shared(&session.0)
+        .await
+        .map_err(|err| invalid(&err.to_string()))?;
+    Ok(Json(match result {
+        Some(status) => json!({"status":"connected","google":status}),
+        None => json!({"status":"pending"}),
+    }))
 }
 
 async fn google_calendar(State(app): State<Arc<App>>) -> Reply<Json<Value>> {
@@ -558,25 +594,106 @@ struct GoogleCallback {
 
 async fn google_callback(
     State(app): State<Arc<App>>,
-    Extension(session): Extension<Session>,
+    headers: HeaderMap,
     Query(q): Query<GoogleCallback>,
-) -> Reply<Redirect> {
+) -> Reply<Response> {
     let denied = !q.error.is_empty();
+    if q.state.starts_with(SHARED_PREFIX) {
+        broker_host(&app, &headers)?;
+        let (status, message) = match app.google.broker_callback(&q.state, &q.code, denied).await {
+            Ok(true) => (
+                StatusCode::OK,
+                "Google 승인이 완료되었습니다. 이 창을 닫고 앱으로 돌아가세요.",
+            ),
+            Ok(false) => (
+                StatusCode::OK,
+                "Google 승인이 취소되었습니다. 앱으로 돌아가 승인 대기를 중단하거나 다시 시작하세요.",
+            ),
+            Err(_) => (
+                StatusCode::BAD_REQUEST,
+                "Google 승인을 완료하지 못했습니다. 앱으로 돌아가 다시 연결하세요.",
+            ),
+        };
+        return Ok((status, message).into_response());
+    }
+    let session = token(&headers).to_owned();
+    let check = session.clone();
+    let auth = app.auth.clone();
+    if !blocking(move || auth.valid(&check)).await? {
+        return Err(fail(StatusCode::UNAUTHORIZED, "로그인이 필요합니다."));
+    }
     match app
         .google
-        .callback(&q.state, &q.code, denied, &session.0)
+        .callback(&q.state, &q.code, denied, &session)
         .await
     {
         Ok(()) => Ok(Redirect::to(if denied {
             "/?google=cancelled"
         } else {
             "/?google=connected"
-        })),
+        })
+        .into_response()),
         Err(err) => {
             save_google_error(&app.store, &err.to_string()).await?;
-            Ok(Redirect::to("/?google=error"))
+            Ok(Redirect::to("/?google=error").into_response())
         }
     }
+}
+
+fn broker_host(app: &App, headers: &HeaderMap) -> Reply<()> {
+    let host = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<axum::http::uri::Authority>().ok());
+    if app.google.broker_enabled()
+        && host.is_some_and(|value| {
+            value.host().eq_ignore_ascii_case("court.imue.one")
+                && value.port_u16().is_none_or(|port| port == 443)
+        })
+    {
+        return Ok(());
+    }
+    Err(fail(
+        StatusCode::NOT_FOUND,
+        "공통 인증 서버를 사용할 수 없습니다.",
+    ))
+}
+
+fn broker_failure() -> Failure {
+    invalid("공통 인증 요청을 처리하지 못했습니다.")
+}
+
+async fn broker_start(
+    State(app): State<Arc<App>>,
+    headers: HeaderMap,
+    Json(input): Json<SharedStart>,
+) -> Reply<Json<Value>> {
+    broker_host(&app, &headers)?;
+    let result = blocking(move || Ok(app.google.broker_start(input))).await?;
+    result.map(Json).map_err(|_| broker_failure())
+}
+
+async fn broker_claim(
+    State(app): State<Arc<App>>,
+    headers: HeaderMap,
+    Json(input): Json<SharedClaim>,
+) -> Reply<Json<Value>> {
+    broker_host(&app, &headers)?;
+    let result = blocking(move || Ok(app.google.broker_claim(input))).await?;
+    result.map(Json).map_err(|_| broker_failure())
+}
+
+async fn broker_refresh(
+    State(app): State<Arc<App>>,
+    headers: HeaderMap,
+    Json(input): Json<SharedRefresh>,
+) -> Reply<Json<Value>> {
+    broker_host(&app, &headers)?;
+    app.google
+        .broker_refresh(input)
+        .await
+        .map(Json)
+        .map_err(|_| broker_failure())
 }
 
 async fn save_google_error(store: &Store, message: &str) -> Reply<()> {

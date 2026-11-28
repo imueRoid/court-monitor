@@ -10,14 +10,15 @@
 </head>
 <body>
 <header>
-  <div><h1>내 NAS의 Google Calendar 연결</h1><p>본인의 Google Cloud 프로젝트로 사건 전용 캘린더를 연결합니다.</p></div>
+  <div><h1>내 NAS의 Google Calendar 연결</h1></div>
   <a href="/">사건 관리로 돌아가기 ↗</a>
 </header>
 <main class="guide">
-  <p class="guide-intro">설치자마다 자신의 Google Cloud 프로젝트와 웹 OAuth 클라이언트를 준비합니다. NAS 관리자 화면에 JSON을 한 번 등록한 뒤 본인 Google 계정으로 승인하면, NAS가 사건 기일을 <strong>사건 관리</strong> 전용 캘린더에 반영합니다. 캘린더 연동은 선택 사항입니다. <a href="/privacy">개인정보처리방침</a></p>
+  <p class="guide-intro">Google 계정을 연결하면 NAS가 사건 기일을 <strong>사건 관리</strong> 전용 캘린더에 반영합니다. 캘린더 연동은 선택 사항입니다. <a href="/privacy">개인정보처리방침</a></p>
   <div class="guide-grid">
     <nav class="guide-nav" aria-label="안내 목차">
-      <a href="#nas">1. NAS 첫 실행</a>
+      <a href="#shared">공통 인증으로 연결</a>
+      <a href="#nas">1. 직접 인증 시작하기</a>
       <a href="#address">2. 콜백 주소 준비</a>
       <a href="#project">3. Google 프로젝트와 API</a>
       <a href="#consent">4. 동의 화면과 권한</a>
@@ -31,12 +32,23 @@
       <button id="guide-print" type="button" class="secondary no-print">인쇄 / PDF 저장</button>
     </nav>
     <div>
+      <section id="shared" class="card">
+        <h2>공통 인증으로 연결하기</h2>
+        <ol>
+          <li>NAS에 로그인하고 <strong>설정 → Google Calendar 연결</strong>에서 <strong>공통 인증 서버 사용</strong>을 선택합니다. 새 설치의 기본값입니다.</li>
+          <li><strong>Google 계정 연결 → Google 승인 창 열기</strong>를 누르고 사용할 Google 계정을 선택해 전용 캘린더 권한을 승인합니다.</li>
+          <li>승인 완료 화면이 뜨면 탭을 닫고 원래 NAS 화면으로 돌아갑니다. <strong>연결됨</strong>이 표시되면 Google Calendar에서 <strong>사건 관리</strong> 캘린더를 확인합니다. <a href="https://calendar.google.com/" target="_blank" rel="noreferrer">Google Calendar 열기</a></li>
+        </ol>
+        <p>Google 승인과 토큰 갱신에는 <code>court.imue.one</code>을 사용합니다. 사건 일정은 이 NAS에서 Google Calendar로 직접 전송됩니다. 이미 직접 연결한 NAS는 계속 기존 설정을 사용하며, 연결 방식을 바꾸려면 설정에서 원하는 방식을 선택한 뒤 다시 승인합니다.</p>
+      </section>
+
       <section id="nas" class="card">
-        <h2>1. NAS에서 사건 관리 열기</h2>
+        <h2>1. 내 Google Cloud 프로젝트로 연결 시작하기</h2>
+        <p>자체 OAuth를 운영하려는 경우 다음 단계를 진행합니다.</p>
         <ol>
           <li>시놀로지용 <code>compose.synology.yaml</code>을 Container Manager의 프로젝트로 실행합니다. 배포 이미지는 Intel/AMD x86_64 기준이며, 기본 접속 포트는 <strong>7708</strong>입니다. <a href="https://github.com/imueRoid/court-monitor/blob/main/server/SYNOLOGY.md" target="_blank" rel="noreferrer">시놀로지 설치 안내</a> · <a href="https://kb.synology.com/en-global/DSM/help/ContainerManager/docker_project" target="_blank" rel="noreferrer">Container Manager 프로젝트 도움말</a></li>
           <li>같은 네트워크의 PC에서 <code>http://NAS의-IP:7708</code>로 접속해 <strong>처음 설정</strong> 화면에서 8~256자의 관리자 비밀번호를 두 번 입력합니다. 이미 사용하던 NAS는 기존 관리자 비밀번호로 로그인합니다.</li>
-          <li><strong>설정 → Google Calendar 연결 → 처음부터 따라 하는 상세 안내</strong>를 엽니다. 현재 HTTP IP 주소는 초기 접속 확인에 사용하고, 실제 Google 연결은 2단계에서 준비한 주소로 로그인해 진행합니다.</li>
+          <li><strong>설정 → Google Calendar 연결 → 내 Google Cloud 프로젝트 사용</strong>을 선택합니다. 현재 HTTP IP 주소는 초기 접속 확인에 사용하고, 실제 직접 연결은 2단계에서 준비한 주소로 로그인해 진행합니다.</li>
         </ol>
       </section>
 
@@ -133,7 +145,7 @@
       <section id="connect" class="card">
         <h2>6. NAS에 JSON을 등록하고 내 Google 계정 승인</h2>
         <ol>
-          <li>Google 콘솔에 등록한 콜백과 같은 호스트·프로토콜·포트로 사건 관리에 로그인합니다. <strong>설정 → Google Calendar 연결 → 최초 1회: 내 Google OAuth 앱 등록</strong>을 펼칩니다.</li>
+          <li>Google 콘솔에 등록한 콜백과 같은 호스트·프로토콜·포트로 사건 관리에 로그인합니다. <strong>설정 → Google Calendar 연결 → 내 Google Cloud 프로젝트 사용</strong>을 선택하고 <strong>직접 인증 설정 · OAuth JSON 등록</strong>을 펼칩니다.</li>
           <li><strong>OAuth JSON 선택하여 등록</strong>을 누르고 준비한 웹 클라이언트 JSON을 선택합니다. 등록 메시지가 뜨면 <strong>Google 계정 연결</strong>을 누릅니다.</li>
           <li>Google에서 실제로 캘린더를 소유할 계정을 골라 권한을 승인합니다. 개인 모드는 프로젝트를 만든 계정, 외부 테스트 모드는 등록해 둔 테스트 계정을 선택합니다. 연결 요청은 10분 이내에 같은 브라우저와 NAS 주소에서 끝냅니다.</li>
           <li>사건 관리로 돌아와 <strong>연결됨 · 사건 관리 전용 캘린더</strong>가 표시되는지 확인합니다. Google 승인은 끝났는데 캘린더 생성에 실패한 경우, 같은 프로젝트의 Calendar API 상태를 확인하고 <strong>전용 캘린더 준비 다시 시도</strong>를 누릅니다.</li>
@@ -172,7 +184,7 @@
 
       <section id="privacy" class="card">
         <h2>인증정보 보관과 연결 해제</h2>
-        <p>Google OAuth 시크릿과 토큰은 각 NAS의 SQLite DB에 암호화해 저장됩니다. 같은 <code>court_data</code> 볼륨에 암호화 키가 있습니다. NAS를 관리하는 사람은 볼륨에 접근할 수 있으므로 백업 권한과 보관 장소도 관리합니다. 실제 자격 증명 파일은 저장소와 배포 이미지 밖의 비공개 위치에 둡니다. <a href="https://developers.google.com/identity/protocols/oauth2/resources/best-practices" target="_blank" rel="noreferrer">Google OAuth 자격 증명 보관 도움말</a></p>
+        <p>공통 연결의 토큰과 갱신 권한, 또는 직접 연결의 OAuth 시크릿과 토큰은 해당 NAS의 SQLite DB에 암호화해 저장됩니다. 같은 <code>court_data</code> 볼륨에 암호화 키가 있습니다. NAS 관리자는 백업 권한과 보관 장소도 관리합니다. 자체 OAuth 자격 증명 파일은 저장소와 배포 이미지 밖의 비공개 위치에 둡니다. <a href="/privacy">개인정보처리방침</a> · <a href="https://developers.google.com/identity/protocols/oauth2/resources/best-practices" target="_blank" rel="noreferrer">Google OAuth 자격 증명 보관 도움말</a></p>
         <p><strong>이 NAS의 연결 해제</strong>를 누르면 이 NAS에서 저장된 Google 토큰이 지워지고 자동 전송이 멈춥니다. Google에 만들어진 캘린더와 일정은 Google Calendar에서 관리합니다. 계정에서 앱의 권한도 회수하려면 Google 계정의 타사 연결에서 해당 앱을 선택합니다. <a href="https://myaccount.google.com/connections" target="_blank" rel="noreferrer">내 Google 계정의 타사 연결 관리</a></p>
       </section>
 
