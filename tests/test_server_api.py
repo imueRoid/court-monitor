@@ -56,7 +56,7 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(self.client.get("/health").status_code, 200)
         response = self.client.get("/", follow_redirects=False)
         self.assertEqual(response.status_code, 200)
-        self.assertIn("<title>사건정보연동</title>", response.text)
+        self.assertIn("<title>사건 일정 관리</title>", response.text)
         self.assertIn('href="/privacy"', response.text)
         policy = self.client.get("/privacy", follow_redirects=False)
         self.assertEqual(policy.status_code, 200)

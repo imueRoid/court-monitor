@@ -72,7 +72,7 @@ def main():
         assert labels["org.opencontainers.image.revision"] == health["revision"]
         session = requests.Session()
         home = session.get(base + "/", allow_redirects=False, timeout=5)
-        assert home.status_code == 200 and "<title>사건정보연동</title>" in home.text
+        assert home.status_code == 200 and "<title>사건 일정 관리</title>" in home.text
         assert 'href="/privacy"' in home.text
         privacy = session.get(base + "/privacy", allow_redirects=False, timeout=5)
         assert privacy.status_code == 200 and "calendar.app.created" in privacy.text
