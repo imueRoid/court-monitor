@@ -115,7 +115,7 @@ class NativeNasTests(unittest.TestCase):
             def login():
                 home = requests.get(base + "/", allow_redirects=False, timeout=2)
                 self.assertEqual(home.status_code, 200)
-                self.assertIn("<title>사건정보연동</title>", home.text)
+                self.assertIn("<title>사건 일정 관리</title>", home.text)
                 policy = requests.get(base + "/privacy", allow_redirects=False, timeout=2)
                 self.assertEqual(policy.status_code, 200)
                 self.assertIn("calendar.app.created", policy.text)
