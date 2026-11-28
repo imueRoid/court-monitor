@@ -1,0 +1,17 @@
+.public-page .public-header{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;padding:20px max(20px,calc((100% - 900px)/2))}
+.public-header nav,.public-footer{display:flex;gap:12px 20px;flex-wrap:wrap}
+.public-header a{color:#fff;text-underline-offset:4px;margin:0}
+.public-header .public-brand{font-weight:700;text-decoration:none}
+.public-page .public-main{max-width:900px;padding:clamp(18px,4vw,48px) 18px 20px}
+.public-intro{padding:8px 0 28px}
+.public-intro h1,.public-policy h1{font-size:clamp(2rem,7vw,3.2rem);margin:0 0 12px;line-height:1.2}
+.public-intro p{max-width:42em;font-size:1.15rem;line-height:1.65;margin-bottom:20px}
+.public-intro .public-button{display:inline-block;padding:10px 18px;border-radius:7px;background:#17664e;color:white;font-weight:700;text-decoration:none}
+.public-main .card{padding:clamp(18px,4vw,34px)}
+.public-main h2{margin-top:24px;line-height:1.4}
+.public-main ul{padding-inline-start:1.35rem}
+.public-main p,.public-main li{line-height:1.75;overflow-wrap:anywhere}
+.public-main li+li{margin-top:.55rem}
+.public-main a,.public-footer a{color:#146049;text-underline-offset:3px}
+.public-date{color:#526873}
+.public-page .public-footer{max-width:900px;margin:auto;padding:0 18px 30px}

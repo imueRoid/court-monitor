@@ -109,6 +109,9 @@ pub fn public() -> Router<Arc<App>> {
     Router::new()
         .route("/health", get(health))
         .route("/", get(index))
+        .route("/about", get(about))
+        .route("/privacy", get(privacy))
+        .route("/privacy.html", get(privacy))
         .route("/login", get(login_page))
         .route("/setup", get(setup_page))
         .route("/guide/google", get(guide))
@@ -161,15 +164,21 @@ async fn guide() -> Response {
     page_html("google-guide.html").await
 }
 
+async fn about() -> Response {
+    page_html("home.html").await
+}
+
+async fn privacy() -> Response {
+    page_html("privacy.html").await
+}
+
 async fn index(State(app): State<Arc<App>>, headers: HeaderMap) -> Reply<Response> {
-    let auth = app.auth.clone();
     let token = token(&headers).to_owned();
-    let option = blocking(move || Ok((auth.configured()?, auth.valid(&token)?))).await?;
-    Ok(match option {
-        (false, _) => Redirect::to("/setup").into_response(),
-        (_, false) => Redirect::to("/login").into_response(),
-        _ => page_html("index.html").await,
-    })
+    let auth = app.auth.clone();
+    if !token.is_empty() && blocking(move || Ok(auth.configured()? && auth.valid(&token)?)).await? {
+        return Ok(page_html("index.html").await);
+    }
+    Ok(about().await)
 }
 
 async fn login_page(State(app): State<Arc<App>>, headers: HeaderMap) -> Reply<Response> {
