@@ -133,13 +133,21 @@ def create_app(settings=None, *, start_worker=True, worker_factory=Worker):
     def google_guide():
         return FileResponse(STATIC / "google-guide.html")
 
+    @app.get("/about")
+    def about():
+        return FileResponse(STATIC / "home.html")
+
+    @app.get("/privacy")
+    @app.get("/privacy.html")
+    def privacy():
+        return FileResponse(STATIC / "privacy.html")
+
     @app.get("/")
     def index(request: Request):
-        if not auth.configured:
-            return RedirectResponse("/setup", status_code=303)
-        if not auth.valid_session(auth.token(request)):
-            return RedirectResponse("/login", status_code=303)
-        return FileResponse(STATIC / "index.html")
+        token = auth.token(request)
+        if token and auth.configured and auth.valid_session(token):
+            return FileResponse(STATIC / "index.html")
+        return about()
 
     @app.get("/login")
     def login_page(request: Request):

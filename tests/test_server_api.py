@@ -54,13 +54,21 @@ class ApiTests(unittest.TestCase):
 
     def test_authentication_is_required_but_health_is_public(self):
         self.assertEqual(self.client.get("/health").status_code, 200)
-        self.assertEqual(self.client.get("/", follow_redirects=False).status_code, 303)
+        response = self.client.get("/", follow_redirects=False)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("<title>사건정보연동</title>", response.text)
+        self.assertIn('href="/privacy"', response.text)
+        policy = self.client.get("/privacy", follow_redirects=False)
+        self.assertEqual(policy.status_code, 200)
+        self.assertIn("calendar.app.created", policy.text)
+        self.assertIn("Limited Use", policy.text)
         self.assertIn("관리자 로그인", self.client.get("/login").text)
         self.assertEqual(self.client.get("/api/cases").status_code, 401)
         self.assertEqual(self.client.post("/api/login", json={"password":"wrong"}).status_code, 401)
         self.login()
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
+        self.assertIn('id="dashboard-tabs"', response.text)
         self.assertEqual(response.headers["x-frame-options"], "DENY")
 
     def test_mutation_requires_csrf_and_case_format_is_validated(self):

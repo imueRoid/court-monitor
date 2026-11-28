@@ -105,7 +105,7 @@ class AuthTests(unittest.TestCase):
         settings = replace(self.settings,database=Path(self.folder.name)/"empty.sqlite3",password="")
         other = TestClient(create_app(settings,start_worker=False))
         try:
-            self.assertEqual(other.get("/",follow_redirects=False).headers["location"],"/setup")
+            self.assertEqual(other.get("/login",follow_redirects=False).headers["location"],"/setup")
             self.assertIn("처음 설정",other.get("/setup").text)
             self.assertEqual(other.post("/api/setup",json={"password":"1234567"}).status_code,422)
             self.assertEqual(other.post("/api/setup",json={"password":"setpass8"}).status_code,200)

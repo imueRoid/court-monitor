@@ -71,6 +71,12 @@ def main():
         assert labels["org.opencontainers.image.version"] == health["version"]
         assert labels["org.opencontainers.image.revision"] == health["revision"]
         session = requests.Session()
+        home = session.get(base + "/", allow_redirects=False, timeout=5)
+        assert home.status_code == 200 and "<title>사건정보연동</title>" in home.text
+        assert 'href="/privacy"' in home.text
+        privacy = session.get(base + "/privacy", allow_redirects=False, timeout=5)
+        assert privacy.status_code == 200 and "calendar.app.created" in privacy.text
+        assert "Limited Use" in privacy.text
         assert session.get(base + "/api/cases", timeout=5).status_code == 401
         assert "처음 설정" in session.get(base + "/login", timeout=5).text
         assert session.post(base + "/api/setup", json={"password": password}, timeout=10).ok
@@ -79,6 +85,7 @@ def main():
         assert session.post(base + "/api/logout", json={}, headers={"X-CSRF-Token":bootstrap["csrf_token"]}, timeout=5).ok
         assert "관리자 로그인" in session.get(base + "/login", timeout=5).text
         assert session.post(base + "/api/login", json={"password": password}, timeout=10).ok
+        assert 'id="dashboard-tabs"' in session.get(base + "/", timeout=5).text
         assert session.get(base + "/api/bootstrap", timeout=5).json()["session_days"] == 90
         docker("restart", name)
         wait_ready(port)

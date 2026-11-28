@@ -113,6 +113,13 @@ class NativeNasTests(unittest.TestCase):
                             server.wait()
 
             def login():
+                home = requests.get(base + "/", allow_redirects=False, timeout=2)
+                self.assertEqual(home.status_code, 200)
+                self.assertIn("<title>사건정보연동</title>", home.text)
+                policy = requests.get(base + "/privacy", allow_redirects=False, timeout=2)
+                self.assertEqual(policy.status_code, 200)
+                self.assertIn("calendar.app.created", policy.text)
+                self.assertIn('id="dashboard-tabs"', session.get(base + "/", timeout=2).text)
                 self.assertEqual(requests.get(base + "/api/update", timeout=2).status_code, 401)
                 self.assertEqual(requests.get(base + "/api/diagnostics", timeout=2).status_code, 401)
                 bootstrap = session.get(base + "/api/bootstrap", timeout=2).json()
