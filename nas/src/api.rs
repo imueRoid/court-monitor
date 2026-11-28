@@ -112,6 +112,7 @@ pub fn public() -> Router<Arc<App>> {
         .route("/about", get(about))
         .route("/privacy", get(privacy))
         .route("/privacy.html", get(privacy))
+        .route("/terms", get(terms))
         .route("/login", get(login_page))
         .route("/setup", get(setup_page))
         .route("/guide/google", get(guide))
@@ -170,6 +171,10 @@ async fn about() -> Response {
 
 async fn privacy() -> Response {
     page_html("privacy.html").await
+}
+
+async fn terms() -> Response {
+    page_html("terms.html").await
 }
 
 async fn index(State(app): State<Arc<App>>, headers: HeaderMap) -> Reply<Response> {

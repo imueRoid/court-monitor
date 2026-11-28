@@ -77,6 +77,9 @@ def main():
         privacy = session.get(base + "/privacy", allow_redirects=False, timeout=5)
         assert privacy.status_code == 200 and "calendar.app.created" in privacy.text
         assert "Limited Use" in privacy.text
+        terms = session.get(base + "/terms", allow_redirects=False, timeout=5)
+        assert terms.status_code == 200 and "<title>서비스 이용약관 · 사건 일정 관리</title>" in terms.text
+        assert 'href="/terms"' in home.text and 'href="/privacy"' in terms.text
         assert session.get(base + "/api/cases", timeout=5).status_code == 401
         assert "처음 설정" in session.get(base + "/login", timeout=5).text
         assert session.post(base + "/api/setup", json={"password": password}, timeout=10).ok

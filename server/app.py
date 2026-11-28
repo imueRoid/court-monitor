@@ -142,6 +142,10 @@ def create_app(settings=None, *, start_worker=True, worker_factory=Worker):
     def privacy():
         return FileResponse(STATIC / "privacy.html")
 
+    @app.get("/terms")
+    def terms():
+        return FileResponse(STATIC / "terms.html")
+
     @app.get("/")
     def index(request: Request):
         token = auth.token(request)
